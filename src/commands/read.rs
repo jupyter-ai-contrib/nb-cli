@@ -1,3 +1,4 @@
+use crate::commands::common;
 use crate::notebook;
 use anyhow::{bail, Context, Result};
 use clap::{Parser, ValueEnum};
@@ -117,7 +118,7 @@ pub fn execute(args: ReadArgs) -> Result<()> {
 
     // Handle specific cell by index
     if let Some(cell_index) = args.cell {
-        let index = normalize_index(cell_index, notebook.cells.len())?;
+        let index = common::normalize_index(cell_index, notebook.cells.len())?;
         let cell = notebook.cells.get(index)
             .context(format!("Cell index {} out of range (notebook has {} cells)", index, notebook.cells.len()))?;
 
@@ -131,7 +132,7 @@ pub fn execute(args: ReadArgs) -> Result<()> {
 
     // Handle specific cell by ID
     if let Some(ref cell_id) = args.cell_id {
-        let (index, cell) = find_cell_by_id(&notebook.cells, cell_id)?;
+        let (index, cell) = common::find_cell_by_id(&notebook.cells, cell_id)?;
         output_cell_info(cell, index, &args.format)?;
         return Ok(());
     }
@@ -159,42 +160,10 @@ pub fn execute(args: ReadArgs) -> Result<()> {
     Ok(())
 }
 
-fn normalize_index(index: i32, len: usize) -> Result<usize> {
-    if index < 0 {
-        let abs_index = index.abs() as usize;
-        if abs_index > len {
-            bail!("Negative index {} out of range (notebook has {} cells)", index, len);
-        }
-        Ok(len - abs_index)
-    } else {
-        let idx = index as usize;
-        if idx >= len {
-            bail!("Cell index {} out of range (notebook has {} cells)", index, len);
-        }
-        Ok(idx)
-    }
-}
-
-fn find_cell_by_id<'a>(cells: &'a [Cell], cell_id: &str) -> Result<(usize, &'a Cell)> {
-    for (index, cell) in cells.iter().enumerate() {
-        if cell.id().as_str() == cell_id {
-            return Ok((index, cell));
-        }
-    }
-    bail!("Cell with ID '{}' not found", cell_id);
-}
-
-fn cell_to_string(cell: &Cell) -> String {
-    cell.source().join("")
-}
-
-fn cell_id_to_string(cell: &Cell) -> String {
-    cell.id().to_string()
-}
 
 fn output_cell_info(cell: &Cell, index: usize, format: &OutputFormat) -> Result<()> {
-    let source = cell_to_string(cell);
-    let id = cell_id_to_string(cell);
+    let source = common::cell_to_string(cell);
+    let id = common::cell_id_to_string(cell);
 
     match format {
         OutputFormat::Json => {
@@ -329,8 +298,8 @@ fn output_code_cells(cells: &[Cell], format: &OutputFormat) -> Result<()> {
             if let Cell::Code { execution_count, .. } = cell {
                 Some(CodeCellInfo {
                     index,
-                    id: cell_id_to_string(cell),
-                    source: cell_to_string(cell),
+                    id: common::cell_id_to_string(cell),
+                    source: common::cell_to_string(cell),
                     execution_count: *execution_count,
                 })
             } else {
@@ -366,8 +335,8 @@ fn output_markdown_cells(cells: &[Cell], format: &OutputFormat) -> Result<()> {
             if let Cell::Markdown { .. } = cell {
                 Some(MarkdownCellInfo {
                     index,
-                    id: cell_id_to_string(cell),
-                    source: cell_to_string(cell),
+                    id: common::cell_id_to_string(cell),
+                    source: common::cell_to_string(cell),
                 })
             } else {
                 None
@@ -402,7 +371,7 @@ fn output_all_outputs(cells: &[Cell], format: &OutputFormat) -> Result<()> {
                         if !outputs.is_empty() {
                             return Some(json!({
                                 "index": index,
-                                "id": cell_id_to_string(cell),
+                                "id": common::cell_id_to_string(cell),
                                 "execution_count": execution_count,
                                 "outputs": outputs,
                             }));
@@ -417,7 +386,7 @@ fn output_all_outputs(cells: &[Cell], format: &OutputFormat) -> Result<()> {
             for (index, cell) in cells.iter().enumerate() {
                 if let Cell::Code { execution_count, outputs, .. } = cell {
                     if !outputs.is_empty() {
-                        println!("=== Cell {} (ID: {}) ===", index, cell_id_to_string(cell));
+                        println!("=== Cell {} (ID: {}) ===", index, common::cell_id_to_string(cell));
                         if let Some(count) = execution_count {
                             println!("Execution count: {}", count);
                         }
@@ -456,7 +425,7 @@ fn output_notebook_structure(notebook: &nbformat::v4::Notebook, format: &OutputF
         .map(|ks| ks.name.clone());
 
     let cells: Vec<CellPreview> = notebook.cells.iter().enumerate().map(|(index, cell)| {
-        let source = cell_to_string(cell);
+        let source = common::cell_to_string(cell);
         let preview = if source.len() > 80 {
             format!("{}...", &source[..77])
         } else {
@@ -471,7 +440,7 @@ fn output_notebook_structure(notebook: &nbformat::v4::Notebook, format: &OutputF
 
         CellPreview {
             index,
-            id: cell_id_to_string(cell),
+            id: common::cell_id_to_string(cell),
             cell_type,
             preview,
             executed,

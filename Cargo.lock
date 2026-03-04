@@ -339,6 +339,7 @@ dependencies = [
  "nbformat",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
