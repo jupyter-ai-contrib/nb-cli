@@ -10,6 +10,7 @@ A command-line interface tool for working with Jupyter notebooks (`.ipynb` files
 - **Update cells** - Modify cell content and types
 - **Delete cells** - Remove cells by index or ID
 - **Clear outputs** - Clean execution outputs and counts
+- **Real-time collaboration** - Edit notebooks open in JupyterLab with instant sync via Y.js
 - **Cell access by index or ID** - Reference cells by stable IDs or positional index
 - **Filter by cell type** - Extract only code or markdown cells
 - **Multiple output formats** - JSON (default) for agents, text for humans
@@ -48,6 +49,105 @@ jupyter-cli cell delete my-notebook.ipynb --cell 0
 
 # Clear outputs
 jupyter-cli output clear my-notebook.ipynb --all
+```
+
+## Real-Time Collaboration
+
+The CLI supports real-time editing of notebooks that are open in JupyterLab using Y.js (Yjs) collaborative editing. When you provide a Jupyter server URL and authentication token, changes are synced instantly without file conflicts.
+
+### How It Works
+
+When you add or update cells with `--server` and `--token` options:
+
+1. **Session Detection** - Checks if the notebook is open in JupyterLab
+2. **Smart Routing**:
+   - If open: Uses Y.js for real-time updates (changes appear instantly in JupyterLab)
+   - If closed: Falls back to file-based updates
+3. **Conflict-Free** - JupyterLab handles file persistence, avoiding "out of band change" errors
+
+### Real-Time Cell Operations
+
+```bash
+# Add a cell to an open notebook (appears instantly)
+jupyter-cli cell add notebook.ipynb \
+  --source "print('real-time!')" \
+  --server http://localhost:8888 \
+  --token your-jupyter-token
+
+# Update a cell in real-time
+jupyter-cli cell update notebook.ipynb \
+  --cell 0 \
+  --source "print('updated live!')" \
+  --server http://localhost:8888 \
+  --token your-jupyter-token
+
+# Append to a cell (supports escape sequences)
+jupyter-cli cell update notebook.ipynb \
+  --cell 0 \
+  --append '\n# Added via CLI' \
+  --server http://localhost:8888 \
+  --token your-jupyter-token
+```
+
+### Getting Your Jupyter Token
+
+Find your token in one of these ways:
+
+1. **From the terminal** when you start Jupyter:
+   ```
+   jupyter lab
+   # Look for: http://localhost:8888/?token=abc123...
+   ```
+
+2. **From JupyterLab** - Help → "Copy Shareable Link" (extract token from URL)
+
+3. **From config**:
+   ```bash
+   jupyter server list
+   ```
+
+### Escape Sequences
+
+When providing source code with `--source` or `--append`, escape sequences are automatically interpreted:
+
+- `\n` - Newline
+- `\t` - Tab
+- `\r` - Carriage return
+- `\\` - Literal backslash
+- `\'` - Single quote
+- `\"` - Double quote
+
+```bash
+# Multi-line code with proper newlines
+jupyter-cli cell add notebook.ipynb \
+  --source 'def hello():\n    print("world")'
+```
+
+### Use Cases
+
+**AI Agents**: Add cells to running notebooks without stopping the kernel or causing conflicts:
+```bash
+# Agent adds analysis cell to open notebook
+jupyter-cli cell add experiment.ipynb \
+  --source "df.describe()" \
+  --server $JUPYTER_URL \
+  --token $JUPYTER_TOKEN
+```
+
+**Automation**: Update notebooks from scripts while viewing results in JupyterLab:
+```bash
+# Script updates config cell
+jupyter-cli cell update config.ipynb \
+  --cell-id "params" \
+  --source "BATCH_SIZE = 64" \
+  --server http://localhost:8888 \
+  --token $TOKEN
+```
+
+**Without Server Args**: Commands work normally with file-based updates:
+```bash
+# Traditional file-based update (no real-time sync)
+jupyter-cli cell add notebook.ipynb --source "print('hello')"
 ```
 
 ## Command Structure
@@ -221,6 +321,12 @@ jupyter-cli cell add notebook.ipynb --source "z = 3" --before "cell-id"
 
 # Read from stdin
 echo "import pandas" | jupyter-cli cell add notebook.ipynb --source -
+
+# Real-time update to open notebook
+jupyter-cli cell add notebook.ipynb \
+  --source "print('live!')" \
+  --server http://localhost:8888 \
+  --token your-token
 ```
 
 ### Update a Cell
@@ -231,7 +337,7 @@ Modify an existing cell:
 # Replace cell content
 jupyter-cli cell update notebook.ipynb --cell 0 --source "new content"
 
-# Append to cell
+# Append to cell (supports escape sequences like \n for newlines)
 jupyter-cli cell update notebook.ipynb --cell 0 --append "\nmore code"
 
 # Change cell type
@@ -239,6 +345,20 @@ jupyter-cli cell update notebook.ipynb --cell 0 --type markdown
 
 # Update by cell ID
 jupyter-cli cell update notebook.ipynb --cell-id "my-cell" --source "updated"
+
+# Real-time update to open notebook
+jupyter-cli cell update notebook.ipynb \
+  --cell 0 \
+  --source "print('updated live!')" \
+  --server http://localhost:8888 \
+  --token your-token
+
+# Append with newlines in real-time
+jupyter-cli cell update notebook.ipynb \
+  --cell 0 \
+  --append '\n# New comment\nprint("more code")' \
+  --server http://localhost:8888 \
+  --token your-token
 ```
 
 ### Delete a Cell
@@ -386,33 +506,47 @@ See `examples/sample.ipynb` for a test notebook demonstrating various cell types
 - **`src/commands/`** - Command implementations
   - `read.rs` - Read/query operations
   - `create_notebook.rs` - Notebook creation
-  - `add_cell.rs` - Add cells
-  - `update_cell.rs` - Update cells
+  - `add_cell.rs` - Add cells (with Y.js support)
+  - `update_cell.rs` - Update cells (with Y.js support)
   - `delete_cell.rs` - Delete cells
   - `clear_outputs.rs` - Clear outputs
+  - `search.rs` - Search notebook cells
+  - `execute_cell.rs` / `execute_notebook.rs` - Cell execution
   - `common.rs` - Shared utilities
+- **`src/execution/`** - Cell execution and real-time collaboration
+  - `remote/` - Y.js and Jupyter server integration
+    - `ydoc.rs` - Y.js document connection and sync
+    - `ydoc_notebook_ops.rs` - Y.js notebook operations (add/update cells)
+    - `session_check.rs` - Detect if notebook is open in JupyterLab
 - **`examples/`** - Sample notebooks for testing
 
 ## Dependencies
 
 - **nbformat** - Jupyter notebook parsing (nbformat v4 specification)
 - **jupyter-protocol** - Output data structures
+- **yrs** - Y.js CRDT for real-time collaboration
+- **tokio** - Async runtime for real-time operations
+- **tokio-tungstenite** - WebSocket client for Jupyter server
 - **clap** - CLI argument parsing
 - **serde/serde_json** - JSON serialization
 - **anyhow** - Error handling
 - **uuid** - Cell ID generation
+- **reqwest** - HTTP client for Jupyter API
 
 ## Roadmap
 
-Future enhancements:
+Completed:
+- ✅ Real-time collaboration via Y.js (cell add/update)
+- ✅ `notebook search` - Find patterns in notebooks
+- ✅ `notebook execute` / `cell execute` - Run cells with kernel
 
-- `notebook search` - Find patterns in notebooks
-- `notebook execute` - Run cells (requires kernel protocol)
+Future enhancements:
 - `notebook convert` - Export to .py, .md, etc.
 - `notebook merge` - Combine multiple notebooks
 - `cell move` - Reorder cells
 - `cell copy` - Duplicate cells
 - Multiple cell operations (ranges, comma-separated indices)
+- Real-time cell delete operation
 
 ## License
 

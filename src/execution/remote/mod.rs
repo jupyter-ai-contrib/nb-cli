@@ -2,8 +2,10 @@
 
 pub mod client;
 pub mod output_conversion;
+pub mod session_check;
 pub mod websocket;
 pub mod ydoc;
+pub mod ydoc_notebook_ops;
 
 use crate::execution::types::{ExecutionConfig, ExecutionError, ExecutionResult};
 use crate::execution::ExecutionBackend;
@@ -152,45 +154,25 @@ impl ExecutionBackend for RemoteExecutor {
         let kernel_name = self.config.kernel_name.as_deref().unwrap_or("python3");
 
         // Try to find an existing session first
-        eprintln!("DEBUG: Looking for existing sessions...");
         let sessions = client.list_sessions().await?;
-        eprintln!("DEBUG: Found {} existing session(s)", sessions.len());
-
-        for (i, s) in sessions.iter().enumerate() {
-            eprintln!(
-                "  Session {}: path={}, kernel_id={}, kernel_name={}",
-                i, s.path, s.kernel.id, s.kernel.name
-            );
-        }
 
         // Try to find and reuse existing session by notebook path
         let (session, created) = if let Some(ref notebook_path) = self.config.notebook_path {
-            eprintln!("DEBUG: Looking for session with path: {}", notebook_path);
             if let Some(existing) = sessions.iter().find(|s| s.path == *notebook_path) {
-                eprintln!("DEBUG: Found existing session - reusing it!");
-                eprintln!("  Session ID: {}", existing.id);
-                eprintln!("  Kernel ID: {}", existing.kernel.id);
-                eprintln!("  Kernel name: {}", existing.kernel.name);
                 // Return the existing session directly - no new session/kernel creation
                 (existing.clone(), false)
             } else {
-                eprintln!("DEBUG: No matching session found, creating new session with new kernel");
                 let s = client
                     .create_session(notebook_path, kernel_name)
                     .await
                     .context("Failed to create session")?;
-                eprintln!("  Session ID: {}", s.id);
-                eprintln!("  Kernel ID: {}", s.kernel.id);
                 (s, true)
             }
         } else {
-            eprintln!("DEBUG: No notebook path provided, creating new session with new kernel");
             let s = client
                 .create_session("notebook", kernel_name)
                 .await
                 .context("Failed to create session")?;
-            eprintln!("  Session ID: {}", s.id);
-            eprintln!("  Kernel ID: {}", s.kernel.id);
             (s, true)
         };
 
@@ -198,7 +180,6 @@ impl ExecutionBackend for RemoteExecutor {
 
         // Connect to kernel via WebSocket with session_id
         let ws_url = client.get_ws_url(&session.kernel.id, Some(&session.id));
-        eprintln!("  WebSocket URL: {}", ws_url);
         let ws = KernelWebSocket::connect(&ws_url)
             .await
             .context("Failed to connect to kernel WebSocket")?;
@@ -260,11 +241,8 @@ impl ExecutionBackend for RemoteExecutor {
         // Only delete session if we created it (not if we reused an existing one)
         if self.created_session {
             if let (Some(client), Some(session)) = (self.client.as_ref(), self.session.as_ref()) {
-                eprintln!("DEBUG: Deleting session we created: {}", session.id);
                 let _ = client.delete_session(&session.id).await;
             }
-        } else {
-            eprintln!("DEBUG: Not deleting session (we reused existing session)");
         }
 
         Ok(())

@@ -1,4 +1,5 @@
 mod commands;
+mod debug_collab;
 mod execution;
 mod notebook;
 
@@ -30,6 +31,10 @@ enum Commands {
         #[command(subcommand)]
         command: OutputCommands,
     },
+    /// Debug collaboration API connection
+    DebugCollab(commands::debug_collab::DebugCollabArgs),
+    /// Check if notebook has an active session
+    CheckSession(commands::check_session::CheckSessionArgs),
 }
 
 #[derive(Subcommand)]
@@ -81,6 +86,8 @@ fn main() {
         Commands::Output { command } => match command {
             OutputCommands::Clear(args) => commands::clear_outputs::execute(args),
         },
+        Commands::DebugCollab(args) => commands::debug_collab::execute(args),
+        Commands::CheckSession(args) => commands::check_session::execute(args),
     };
 
     if let Err(e) = result {

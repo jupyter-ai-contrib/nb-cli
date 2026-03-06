@@ -1,24 +1,9 @@
-use crate::commands::common;
+use crate::commands::common::{self, CellType, OutputFormat};
 use crate::notebook;
 use anyhow::{bail, Context, Result};
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use nbformat::v4::Cell;
 use serde::Serialize;
-
-#[derive(Clone, ValueEnum)]
-#[value(rename_all = "lowercase")]
-pub enum CellType {
-    Code,
-    Markdown,
-    Raw,
-}
-
-#[derive(Clone, ValueEnum)]
-#[value(rename_all = "lowercase")]
-pub enum OutputFormat {
-    Json,
-    Text,
-}
 
 #[derive(Parser)]
 pub struct UpdateCellArgs {
@@ -65,6 +50,14 @@ pub struct UpdateCellArgs {
     #[arg(short = 't', long = "type", value_name = "TYPE")]
     pub cell_type: Option<CellType>,
 
+    /// Jupyter server URL (for real-time updates if notebook is open)
+    #[arg(long)]
+    pub server: Option<String>,
+
+    /// Authentication token for Jupyter server
+    #[arg(long)]
+    pub token: Option<String>,
+
     /// Output format
     #[arg(
         short = 'f',
@@ -94,13 +87,111 @@ pub fn execute(args: UpdateCellArgs) -> Result<()> {
         bail!("Must specify --cell or --cell-id");
     }
 
-    // Read notebook
-    let original_content =
-        std::fs::read_to_string(&args.file).context("Failed to read original notebook file")?;
-    println!("=== DEBUG: ORIGINAL FILE CONTENT ===");
-    println!("{}", original_content);
-    println!("=== END ORIGINAL ===\n");
+    // Check if we should use real-time Y.js updates
+    let use_realtime = args.server.is_some() && args.token.is_some();
 
+    if use_realtime {
+        // Create Tokio runtime for async operations
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+
+        return runtime.block_on(execute_with_realtime(args));
+    }
+
+    // Fallback to file-based updates
+    execute_file_based(args)
+}
+
+async fn execute_with_realtime(args: UpdateCellArgs) -> Result<()> {
+    use crate::execution::remote::{session_check, ydoc_notebook_ops};
+
+    let server_url = args.server.as_ref().unwrap();
+    let token = args.token.as_ref().unwrap();
+
+    // Extract notebook filename for session check
+    let notebook_filename = std::path::Path::new(&args.file)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .context("Invalid notebook path")?;
+
+    eprintln!("Checking if notebook is open in JupyterLab...");
+
+    // Check if notebook has an active session
+    let has_session = session_check::has_active_session(server_url, token, notebook_filename)
+        .await
+        .unwrap_or(false);
+
+    if !has_session {
+        eprintln!("Notebook is not open - using file-based update");
+        return execute_file_based(args);
+    }
+
+    eprintln!("Notebook is open - using real-time Y.js updates");
+
+    // Read notebook to find the cell
+    let notebook = notebook::read_notebook(&args.file).context("Failed to read notebook")?;
+
+    // Find the target cell
+    let (index, cell_id) = if let Some(cell_index) = args.cell {
+        let idx = common::normalize_index(cell_index, notebook.cells.len())?;
+        let id = notebook.cells[idx].id().to_string();
+        (idx, id)
+    } else if let Some(ref id) = args.cell_id {
+        let (idx, cell) = common::find_cell_by_id(&notebook.cells, id)?;
+        (idx, cell.id().to_string())
+    } else {
+        unreachable!("Already validated cell selector");
+    };
+
+    let mut updates = Vec::new();
+
+    // Determine what to update
+    let new_source = if let Some(ref source_text) = args.source {
+        let parsed = common::parse_source(source_text)?;
+        updates.push("source replaced".to_string());
+        Some(parsed.join(""))
+    } else {
+        None
+    };
+
+    let append_source = if let Some(ref append_text) = args.append {
+        let parsed = common::parse_source(append_text)?;
+        updates.push("source appended".to_string());
+        Some(parsed.join(""))
+    } else {
+        None
+    };
+
+    // Update via Y.js
+    ydoc_notebook_ops::ydoc_update_cell(
+        server_url,
+        token,
+        notebook_filename,
+        index,
+        new_source.as_deref(),
+        append_source.as_deref(),
+    )
+    .await
+    .context("Failed to update cell via Y.js")?;
+
+    eprintln!("✓ Cell updated via Y.js - changes will be persisted by JupyterLab");
+
+    // Output result
+    let result = UpdateCellResult {
+        file: args.file.clone(),
+        cell_id,
+        index,
+        updated: updates,
+    };
+
+    output_result(&result, &args.format)?;
+
+    Ok(())
+}
+
+fn execute_file_based(args: UpdateCellArgs) -> Result<()> {
+    // Read notebook
     let mut notebook = notebook::read_notebook(&args.file).context("Failed to read notebook")?;
 
     // Find the target cell
@@ -224,18 +315,6 @@ pub fn execute(args: UpdateCellArgs) -> Result<()> {
     // Write notebook atomically
     notebook::write_notebook_atomic(&args.file, &notebook).context("Failed to write notebook")?;
 
-    // Read back the updated content for debugging
-    let updated_content =
-        std::fs::read_to_string(&args.file).context("Failed to read updated notebook file")?;
-    println!("=== DEBUG: UPDATED FILE CONTENT ===");
-    println!("{}", updated_content);
-    println!("=== END UPDATED ===\n");
-
-    // Show the diff
-    println!("=== DEBUG: FILE DIFF ===");
-    show_diff(&original_content, &updated_content);
-    println!("=== END DIFF ===\n");
-
     // Output result
     let result = UpdateCellResult {
         file: args.file.clone(),
@@ -261,25 +340,4 @@ fn output_result(result: &UpdateCellResult, format: &OutputFormat) -> Result<()>
         }
     }
     Ok(())
-}
-
-fn show_diff(original: &str, updated: &str) {
-    let original_lines: Vec<&str> = original.lines().collect();
-    let updated_lines: Vec<&str> = updated.lines().collect();
-
-    let max_lines = std::cmp::max(original_lines.len(), updated_lines.len());
-
-    for i in 0..max_lines {
-        let orig_line = original_lines.get(i).unwrap_or(&"");
-        let upd_line = updated_lines.get(i).unwrap_or(&"");
-
-        if orig_line != upd_line {
-            if !orig_line.is_empty() {
-                println!("- [Line {}]: {}", i + 1, orig_line);
-            }
-            if !upd_line.is_empty() {
-                println!("+ [Line {}]: {}", i + 1, upd_line);
-            }
-        }
-    }
 }

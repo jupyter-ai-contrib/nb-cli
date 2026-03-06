@@ -1,7 +1,9 @@
 pub mod add_cell;
+pub mod check_session;
 pub mod clear_outputs;
 pub mod common;
 pub mod create_notebook;
+pub mod debug_collab;
 pub mod delete_cell;
 pub mod execute_cell;
 pub mod execute_notebook;

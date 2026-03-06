@@ -97,61 +97,38 @@ pub fn update_cell_outputs(
     cell_index: usize,
     outputs: &[Output],
 ) -> Result<(), anyhow::Error> {
-    eprintln!(
-        "      update_cell_outputs: Getting cell at index {}",
-        cell_index
-    );
-
     // Get the cell value at the given index
     let cell_value = cells_array
         .get(txn, cell_index as u32)
         .ok_or_else(|| anyhow::anyhow!("Cell index {} out of bounds", cell_index))?;
 
-    eprintln!("      update_cell_outputs: Casting to MapRef");
-
-    // Cast to MapRef - cast() returns Result, not Option
+    // Cast to MapRef
     let cell_map = cell_value
         .cast::<yrs::MapRef>()
         .map_err(|_| anyhow::anyhow!("Cell at index {} is not a Map", cell_index))?;
 
-    eprintln!("      update_cell_outputs: Getting outputs array");
-
     // Get or create the outputs array
     let outputs_array: ArrayRef = if let Some(outputs_val) = cell_map.get(txn, "outputs") {
-        eprintln!("      update_cell_outputs: Outputs field exists, casting");
         let arr_ref: ArrayRef = outputs_val
             .cast::<ArrayRef>()
             .map_err(|_| anyhow::anyhow!("Outputs field is not an Array"))?;
         arr_ref
     } else {
-        eprintln!("      update_cell_outputs: Outputs field doesn't exist, creating");
         // Create new array if it doesn't exist
         cell_map.insert(txn, "outputs", ArrayPrelim::default())
     };
 
     // Clear existing outputs
     let current_len = outputs_array.len(txn);
-    eprintln!(
-        "      update_cell_outputs: Clearing {} existing outputs",
-        current_len
-    );
-
     if current_len > 0 {
         outputs_array.remove_range(txn, 0, current_len);
     }
 
     // Add new outputs
-    eprintln!(
-        "      update_cell_outputs: Adding {} new outputs",
-        outputs.len()
-    );
-
     for (i, output) in outputs.iter().enumerate() {
         let output_map = output_to_map_prelim(output);
         outputs_array.insert(txn, i as u32, output_map);
     }
-
-    eprintln!("      update_cell_outputs: Done");
 
     Ok(())
 }

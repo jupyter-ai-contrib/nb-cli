@@ -1,6 +1,22 @@
 use anyhow::{bail, Context, Result};
+use clap::ValueEnum;
 use nbformat::v4::Cell;
 use std::io::{self, Read};
+
+#[derive(Clone, ValueEnum)]
+#[value(rename_all = "lowercase")]
+pub enum CellType {
+    Code,
+    Markdown,
+    Raw,
+}
+
+#[derive(Clone, ValueEnum)]
+#[value(rename_all = "lowercase")]
+pub enum OutputFormat {
+    Json,
+    Text,
+}
 
 /// Normalize a cell index, supporting negative indexing (e.g., -1 for last cell)
 pub fn normalize_index(index: i32, len: usize) -> Result<usize> {
@@ -61,10 +77,56 @@ pub fn parse_source(input: &str) -> Result<Vec<String>> {
             .context("Failed to read from stdin")?;
         buffer
     } else {
-        input.to_string()
+        // Unescape common escape sequences
+        unescape_string(input)
     };
 
     Ok(split_source(&text))
+}
+
+/// Unescape common escape sequences in a string
+fn unescape_string(s: &str) -> String {
+    let mut result = String::new();
+    let mut chars = s.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.peek() {
+                Some('n') => {
+                    chars.next();
+                    result.push('\n');
+                }
+                Some('t') => {
+                    chars.next();
+                    result.push('\t');
+                }
+                Some('r') => {
+                    chars.next();
+                    result.push('\r');
+                }
+                Some('\\') => {
+                    chars.next();
+                    result.push('\\');
+                }
+                Some('\'') => {
+                    chars.next();
+                    result.push('\'');
+                }
+                Some('"') => {
+                    chars.next();
+                    result.push('"');
+                }
+                _ => {
+                    // Unknown escape sequence, keep the backslash
+                    result.push(ch);
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
 }
 
 /// Split text into Jupyter's line format (Vec<String> with newlines preserved)
@@ -139,5 +201,18 @@ mod tests {
             split_source("line1\nline2\n"),
             vec!["line1\n", "line2\n", ""]
         );
+    }
+
+    #[test]
+    fn test_unescape_string() {
+        assert_eq!(super::unescape_string("hello\\nworld"), "hello\nworld");
+        assert_eq!(super::unescape_string("tab\\there"), "tab\there");
+        assert_eq!(
+            super::unescape_string("backslash\\\\here"),
+            "backslash\\here"
+        );
+        assert_eq!(super::unescape_string("quote\\'here"), "quote'here");
+        assert_eq!(super::unescape_string("no escapes"), "no escapes");
+        assert_eq!(super::unescape_string("\\n\\t\\r"), "\n\t\r");
     }
 }
