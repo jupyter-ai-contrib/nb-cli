@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 use std::process;
 
 #[derive(Parser)]
-#[command(name = "jupyter-cli")]
+#[command(name = "nb")]
 #[command(about = "CLI tool for working with Jupyter notebooks", version)]
 struct Cli {
     #[command(subcommand)]

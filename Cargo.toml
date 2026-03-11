@@ -1,5 +1,5 @@
 [package]
-name = "jupyter-cli"
+name = "nb-cli"
 version = "0.0.1"
 edition = "2021"
 description = "A command-line tool for reading, writing, and executing Jupyter notebooks"
@@ -9,6 +9,12 @@ repository = "https://github.com/3coins/jupyter-cli"
 homepage = "https://github.com/3coins/jupyter-cli"
 keywords = ["jupyter", "notebooks", "cli", "ai"]
 categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "nb"
+path = "src/main.rs"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 nbformat = "1.2"

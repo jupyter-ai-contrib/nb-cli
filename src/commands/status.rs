@@ -17,8 +17,8 @@ pub fn execute(args: StatusArgs) -> Result<()> {
         None => {
             println!("Not connected to any Jupyter server");
             println!("\nTo connect, run:");
-            println!("  jupyter-cli connect");
-            println!("  jupyter-cli connect --server URL --token TOKEN");
+            println!("  nb connect");
+            println!("  nb connect --server URL --token TOKEN");
             Ok(())
         }
         Some(conn) => {
@@ -57,7 +57,7 @@ pub fn execute(args: StatusArgs) -> Result<()> {
                     Err(e) => {
                         println!("✗ Connection failed: {}", e);
                         println!("\nTry reconnecting with:");
-                        println!("  jupyter-cli connect");
+                        println!("  nb connect");
                     }
                 }
             }

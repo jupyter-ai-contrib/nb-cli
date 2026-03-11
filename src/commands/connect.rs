@@ -52,7 +52,7 @@ async fn execute_async(args: ConnectArgs) -> Result<()> {
         bail!(
             "No running Jupyter servers found.\n\
             \nStart a Jupyter server with:\n  jupyter lab\n  jupyter notebook\n\
-            \nOr connect manually with:\n  jupyter-cli connect --server URL --token TOKEN"
+            \nOr connect manually with:\n  nb connect --server URL --token TOKEN"
         );
     }
 
@@ -96,7 +96,7 @@ async fn execute_async(args: ConnectArgs) -> Result<()> {
     println!("  Working dir: {}", selected.working_dir);
     println!("  Config: {}", config_path.display());
     println!(
-        "\nYou can now run commands without --server and --token flags:\n  jupyter-cli cell execute notebook.ipynb --cell 0"
+        "\nYou can now run commands without --server and --token flags:\n  nb cell execute notebook.ipynb --cell 0"
     );
 
     Ok(())

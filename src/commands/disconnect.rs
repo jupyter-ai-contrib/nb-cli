@@ -19,7 +19,7 @@ pub fn execute(_args: DisconnectArgs) -> Result<()> {
 
     println!("✓ Disconnected from Jupyter server");
     println!("\nTo connect again, run:");
-    println!("  jupyter-cli connect");
+    println!("  nb connect");
 
     Ok(())
 }
