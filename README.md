@@ -1,13 +1,9 @@
 # nb - Notebook CLI
 
-A fast, programmatic command-line interface for working with Jupyter notebooks. Built with Rust and designed for AI agents, automation scripts, and developers who need reliable notebook manipulation.
+A fast, programmatic command-line interface for working with Jupyter notebooks. Designed for AI agents, automation scripts, and developers who need reliable notebook manipulation without opening a browser.
 
-## Purpose
-
-- **Agent-friendly**: JSON output following nbformat specification for easy parsing
-- **Local & Remote**: Work with notebook files directly or sync with running JupyterLab servers
-- **Real-time collaboration**: Edit notebooks open in JupyterLab via Y.js with instant sync
-- **Reliable**: Built with Rust for performance and correctness
+[![BSD-3-Clause License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org)
 
 ## Installation
 
@@ -20,107 +16,144 @@ The binary will be available at `target/release/nb`.
 ## Quick Start
 
 ```bash
-# Create a notebook
+# Create and build a notebook
 nb notebook create analysis.ipynb
-
-# Add a cell
-nb cell add analysis.ipynb --source "print('hello')"
-
-# Read notebook structure
+nb cell add analysis.ipynb --source "import pandas as pd"
+nb cell add analysis.ipynb --source "# Analysis" --type markdown
 nb notebook read analysis.ipynb
 
-# Read specific cell with outputs
-nb notebook read analysis.ipynb --cell 0 --with-outputs
-
-# Update a cell
-nb cell update analysis.ipynb --cell 0 --source "print('updated')"
-
-# Execute cells
-nb cell execute analysis.ipynb --cell 0
-nb notebook execute analysis.ipynb  # Execute all cells
-
-# Search for patterns
-nb notebook search analysis.ipynb "import pandas"
-
-# Delete a cell
-nb cell delete analysis.ipynb --cell 0
-
-# Clear outputs
-nb output clear analysis.ipynb --all
+# Execute and view results
+nb notebook execute analysis.ipynb
+nb notebook read analysis.ipynb --with-outputs
 ```
 
-## Local vs Remote Mode
+## Local Mode
 
-### Local Mode (File-based)
-Default behavior. Operations directly modify `.ipynb` files:
+**Default behavior. Operations directly modify `.ipynb` files.**
 
-```bash
-nb cell add notebook.ipynb --source "x = 1"
-```
-
-### Remote Mode (Real-time sync)
-When working with notebooks open in JupyterLab, use `--server` and `--token` for instant synchronization:
+Local mode lets you create, edit, execute, and query notebooks on disk without any server running. All changes are written directly to the `.ipynb` file.
 
 ```bash
-# Connect to server (saves connection for future commands)
-nb connect --server http://localhost:8888 --token your-jupyter-token
+# Create and edit
+nb notebook create notebook.ipynb
+nb cell add notebook.ipynb --source "x = 1 + 1"
+nb cell update notebook.ipynb --cell 0 --source "x = 2 + 2"
 
-# Add cell - appears instantly in JupyterLab
-nb cell add notebook.ipynb --source "df.head()"
+# Read and search
+nb notebook read notebook.ipynb              # View structure
+nb notebook read notebook.ipynb --cell 0     # View specific cell
+nb notebook search notebook.ipynb "import"   # Find patterns
 
-# Update cell in real-time
-nb cell update notebook.ipynb --cell 0 --append "\ndf.describe()"
-
-# Check connection status
-nb status
-
-# Execute via remote kernel
+# Execute locally (requires Python dependencies)
 nb cell execute notebook.ipynb --cell 0
+nb notebook execute notebook.ipynb           # Execute all cells
+```
+
+### Python Dependencies for Local Execution
+
+To execute notebooks in local mode, install:
+
+```bash
+pip install -r requirements.txt
+```
+
+Or manually:
+```bash
+pip install nbclient nbformat
+```
+
+**Note**: These dependencies are **only** required for local execution. Remote mode doesn't need them.
+
+## Remote Mode
+
+**Connect to a running JupyterLab server for real-time synchronization.**
+
+When you connect to a Jupyter server, the CLI uses Y.js for conflict-free real-time updates. Changes appear instantly in your open JupyterLab tabs, and you can execute code using the server's kernel.
+
+### Connect to a Server
+
+**Auto-detection (recommended):**
+```bash
+nb connect
+```
+
+Automatically finds running Jupyter servers using `jupyter server list`, validates them, and connects. If multiple servers are found, you'll get an interactive prompt to choose one.
+
+**Manual connection:**
+```bash
+nb connect --server http://localhost:8888 --token your-jupyter-token
+```
+
+**Connection options:**
+- `--server`: Server URL (e.g., `http://localhost:8888`)
+- `--token`: Authentication token from Jupyter
+- `--skip-validation`: Skip connection validation checks
+
+**Getting your token:**
+- From terminal: Look for the token in `jupyter lab` startup URL
+- From JupyterLab: Help → "Copy Shareable Link"
+- From command: `jupyter server list`
+
+### Connection Persistence
+
+Connection info is saved in `.nb_connection.json` in the current directory. All subsequent commands automatically use this connection until you disconnect or change directories.
+
+```bash
+# Connect once (auto-detect)
+nb connect
+
+# Future commands use saved connection
+nb cell add notebook.ipynb --source "df.head()"
+nb cell execute notebook.ipynb --cell 0
+
+# Check current connection
+nb status
 
 # Disconnect when done
 nb disconnect
 ```
 
-**How it works**: The CLI detects if a notebook is open in JupyterLab and uses Y.js for conflict-free real-time updates. If the notebook isn't open, it falls back to file-based operations.
+**How it works**: When connected, the CLI detects if a notebook is open in JupyterLab and uses Y.js for instant sync. If the notebook isn't open on the server, operations fall back to file-based mode.
 
-**Getting your token**:
-- From terminal: Look for token in `jupyter lab` startup URL
-- From JupyterLab: Help → "Copy Shareable Link"
-- From command: `jupyter server list`
-
-## Command Structure
-
-Commands are organized by resource:
+### Remote Mode Examples
 
 ```bash
-nb notebook <command>  # create, read, execute, search
-nb cell <command>      # add, update, delete, execute
-nb output <command>    # clear
-nb connect/status/disconnect  # Server connection management
+# Connect automatically
+nb connect
+
+# Add cell - appears instantly in JupyterLab
+nb cell add experiment.ipynb --source "df.describe()"
+
+# Update cell in real-time
+nb cell update experiment.ipynb --cell 0 --append "\nprint('done')"
+
+# Execute via remote kernel
+nb cell execute experiment.ipynb --cell 0
+
+# Disconnect when switching projects
+nb disconnect
 ```
 
-Use `--help` with any command for details.
+## Commands
 
-## Essential Examples
+| Command | Purpose |
+|---------|---------|
+| `nb notebook create <path>` | Create a new notebook |
+| `nb notebook read <path>` | Read notebook structure and cells |
+| `nb notebook execute <path>` | Execute all cells in notebook |
+| `nb notebook search <path> <pattern>` | Search for patterns in notebook |
+| `nb cell add <path> --source <code>` | Add a new cell |
+| `nb cell update <path> --cell <index>` | Update an existing cell |
+| `nb cell delete <path> --cell <index>` | Delete a cell |
+| `nb cell execute <path> --cell <index>` | Execute a specific cell |
+| `nb output clear <path>` | Clear cell outputs |
+| `nb connect [--server URL --token TOKEN]` | Connect to Jupyter server (auto-detects if no args) |
+| `nb status` | Show current connection status |
+| `nb disconnect` | Disconnect from server |
 
-### For AI Agents
+Use `--help` with any command for full details and options.
 
-```bash
-# Analyze all code in a notebook
-nb notebook read notebook.ipynb --only-code
-
-# Find cells with errors
-nb notebook search notebook.ipynb --with-errors
-
-# Add analysis cell to running notebook
-nb cell add experiment.ipynb \
-  --source "df.describe()" \
-  --server http://localhost:8888 \
-  --token $TOKEN
-
-# Debug: inspect cell with its outputs
-nb notebook read notebook.ipynb --cell 5 --with-outputs
-```
+## Key Features
 
 ### Cell Referencing
 
@@ -130,6 +163,7 @@ Two ways to reference cells:
 
 ### Output Format
 
+Control output format for better integration with your workflow:
 - **JSON** (default): Structured, nbformat-compliant for programmatic use
 - **Text** (`-f text`): Human-readable for terminal viewing
 
@@ -137,7 +171,7 @@ Two ways to reference cells:
 nb notebook read notebook.ipynb -f text
 ```
 
-## Multi-line Code
+### Multi-line Code
 
 Escape sequences are automatically interpreted:
 
@@ -153,44 +187,53 @@ nb cell update notebook.ipynb --cell 0 \
 
 ## Common Workflows
 
-**Build notebook programmatically**:
+**Build notebook programmatically:**
 ```bash
 nb notebook create analysis.ipynb --template basic
 nb cell add analysis.ipynb --source "import pandas as pd"
 nb cell add analysis.ipynb --source "# Analysis" --type markdown
+nb notebook execute analysis.ipynb
 ```
 
-**Debug and fix**:
+**Debug and fix cells:**
 ```bash
 # Find problematic cells
 nb notebook search notebook.ipynb --with-errors
 
 # Inspect specific cell with outputs
-nb notebook read notebook.ipynb -c 5 --with-outputs
+nb notebook read notebook.ipynb --cell 5 --with-outputs
 
 # Fix the cell
-nb cell update notebook.ipynb -c 5 --source "fixed code"
+nb cell update notebook.ipynb --cell 5 --source "fixed code"
 
 # Re-execute
-nb cell execute notebook.ipynb -c 5
+nb cell execute notebook.ipynb --cell 5
 ```
 
-**Extract content**:
+**Extract specific content:**
 ```bash
-# All code cells
+nb notebook read notebook.ipynb --only-code      # All code cells
+nb notebook read notebook.ipynb --only-markdown  # All markdown
+nb notebook read notebook.ipynb --cell -1        # Last cell
+```
+
+**For AI agents:**
+```bash
+# Analyze all code in a notebook
 nb notebook read notebook.ipynb --only-code
 
-# All markdown documentation
-nb notebook read notebook.ipynb --only-markdown
+# Find cells with errors
+nb notebook search notebook.ipynb --with-errors
 
-# Last cell
-nb notebook read notebook.ipynb -c -1
+# Add analysis cell and execute
+nb cell add experiment.ipynb --source "df.describe()"
+nb cell execute experiment.ipynb --cell -1
 ```
 
 ## Examples
 
-See `examples/sample.ipynb` for a test notebook with various cell types and outputs.
+See `examples/` directory for sample notebooks demonstrating various cell types and outputs.
 
 ## License
 
-MIT
+[BSD-3-Clause](LICENSE)
