@@ -1,0 +1,9 @@
+# Python dependencies for nb-cli local execution
+# Install with: pip install -r requirements.txt
+
+# Core dependencies for local notebook execution
+nbclient>=0.8.0
+nbformat>=5.9.0
+
+# Note: These are only required for local mode execution
+# Remote mode (connecting to Jupyter Server) doesn't need these
