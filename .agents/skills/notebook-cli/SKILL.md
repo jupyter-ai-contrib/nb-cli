@@ -1,11 +1,39 @@
 ---
 name: notebook-cli
-description: Use the custom `nb` cli for working with Jupyter notebooks instead of built-in tools. Provides programmatic access to notebook operations (read, create, edit cells, execute, search) with JSON output for AI agents. Supports both local file-based and remote real-time collaboration modes. Invoke when working with .ipynb files in this project.
+description: ALWAYS use the `nb` CLI for ALL Jupyter notebook operations instead of built-in tools (Read, NotebookEdit, etc). This includes reading, creating, editing cells, executing, and searching notebooks. Provides programmatic access with JSON output for AI agents. Supports both local file-based and remote real-time collaboration modes. REQUIRED for all .ipynb files in this project.
 ---
 
 # Working with Jupyter Notebooks using nb
 
-Use the custom `nb` tool (Rust-based CLI) for programmatic notebook manipulation instead of built-in notebook operations.
+**IMPORTANT**: Use the custom `nb` tool (Rust-based CLI) for ALL notebook operations instead of built-in tools like Read or NotebookEdit. This includes reading notebooks.
+
+## Quick Reference (Most Common Commands)
+
+```bash
+# ALWAYS check --help first if unsure: nb --help, nb notebook --help, nb cell --help
+
+# Read entire notebook (NOT "nb list" - use "notebook read")
+nb notebook read notebook.ipynb
+
+# Read specific cell (use --cell or -c, NOT --index)
+nb notebook read notebook.ipynb --cell 2
+nb notebook read notebook.ipynb -c -1  # last cell
+
+# Execute entire notebook
+nb notebook execute notebook.ipynb
+
+# Update cell (use --cell, NOT --index)
+nb cell update notebook.ipynb --cell 2 --source "new code"
+
+# Add cell
+nb cell add notebook.ipynb --source "print('hello')"
+```
+
+## Common Mistakes to Avoid
+
+- ❌ `nb list` → ✅ `nb notebook read`
+- ❌ `--index` → ✅ `--cell` or `-c`
+- ❌ Forgetting to check `--help` → ✅ Always use `nb <command> --help` when unsure
 
 ## Create Notebook
 
