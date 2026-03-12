@@ -87,16 +87,10 @@ nb connect --server http://localhost:8888 --token your-jupyter-token
 **Connection options:**
 - `--server`: Server URL (e.g., `http://localhost:8888`)
 - `--token`: Authentication token from Jupyter
-- `--skip-validation`: Skip connection validation checks
-
-**Getting your token:**
-- From terminal: Look for the token in `jupyter lab` startup URL
-- From JupyterLab: Help → "Copy Shareable Link"
-- From command: `jupyter server list`
 
 ### Connection Persistence
 
-Connection info is saved in `.nb_connection.json` in the current directory. All subsequent commands automatically use this connection until you disconnect or change directories.
+Connection info is saved in `.jupyter/cli.json` in the current directory. All subsequent commands automatically use this connection until you disconnect or change directories.
 
 ```bash
 # Connect once (auto-detect)
