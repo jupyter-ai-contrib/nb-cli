@@ -16,7 +16,50 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+
+    - name: Set up Rust cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        enable-cache: true
+
+    - name: Cache Python test venv
+      uses: actions/cache@v4
+      with:
+        path: tests/.test-venv
+        key: ${{ runner.os }}-test-venv-${{ hashFiles('requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-test-venv-
+
+    - name: Setup test environment
+      run: ./tests/setup_test_env.sh
+      continue-on-error: true
+
     - name: Build
       run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+
+    - name: Run local mode tests
+      run: cargo test --test integration_local_mode --verbose
+
+    - name: Run execution tests
+      run: cargo test --test integration_execution --verbose
+
+    - name: Run all other tests
+      run: cargo test --lib --bins --verbose

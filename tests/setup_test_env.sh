@@ -1,0 +1,47 @@
+#!/bin/bash
+# Setup test environment for execution tests
+
+set -e
+
+echo "🔧 Setting up test environment..."
+
+# Check if uv is installed
+if ! command -v uv &> /dev/null; then
+    echo "❌ uv is not installed"
+    echo "📦 Install uv with: curl -LsSf https://astral.sh/uv/install.sh | sh"
+    exit 1
+fi
+
+# Check if python3 is installed
+if ! command -v python3 &> /dev/null; then
+    echo "❌ python3 is not installed"
+    echo "📦 Please install Python 3.8 or later"
+    exit 1
+fi
+
+# Get the directory of this script
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+VENV_PATH="$SCRIPT_DIR/.test-venv"
+
+# Create venv if it doesn't exist
+if [ ! -d "$VENV_PATH" ]; then
+    echo "📦 Creating test virtual environment..."
+    uv venv "$VENV_PATH"
+else
+    echo "✅ Test venv already exists"
+fi
+
+# Install dependencies using uv pip from requirements.txt
+echo "📦 Installing test dependencies..."
+REQUIREMENTS_FILE="$SCRIPT_DIR/../requirements.txt"
+uv pip install --python "$VENV_PATH" -r "$REQUIREMENTS_FILE"
+
+echo ""
+echo "✅ Test environment ready!"
+echo ""
+echo "To run execution tests:"
+echo "  cargo test --test integration_execution"
+echo ""
+echo "To run all tests:"
+echo "  cargo test"
+echo ""
