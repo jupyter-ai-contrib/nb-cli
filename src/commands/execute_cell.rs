@@ -12,7 +12,7 @@ pub struct ExecuteCellArgs {
     pub file: String,
 
     /// Cell index to execute (supports negative indexing like -1 for last cell)
-    #[arg(short, long, group = "cell_selector")]
+    #[arg(short, long, group = "cell_selector", allow_negative_numbers = true)]
     pub cell: Option<i32>,
 
     /// Cell ID to execute

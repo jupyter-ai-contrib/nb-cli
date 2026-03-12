@@ -79,11 +79,6 @@ fn initialize_venv() -> Option<PathBuf> {
     }
 }
 
-/// Check if execution tests can run
-pub fn can_run_execution_tests() -> bool {
-    setup_execution_venv().is_some()
-}
-
 /// Set environment to use test venv for execution
 pub fn setup_venv_environment() -> Option<String> {
     let mutex = VENV_PATH.get()?;

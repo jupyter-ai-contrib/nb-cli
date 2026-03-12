@@ -9,6 +9,7 @@ use std::process;
 #[derive(Parser)]
 #[command(name = "nb")]
 #[command(about = "CLI tool for working with Jupyter notebooks", version)]
+#[command(allow_negative_numbers = true)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

@@ -335,6 +335,47 @@ fn test_execute_with_timeout() {
 }
 
 #[test]
+fn test_execute_last_cell_with_negative_index() {
+    let Some(env) = TestEnv::new() else {
+        eprintln!("⚠️  Skipping test: execution environment not available");
+        return;
+    };
+
+    let nb_path = env.notebook_path("test.ipynb");
+
+    // Create a notebook with independent cells
+    env.run(&["notebook", "create", nb_path.to_str().unwrap()])
+        .assert_success();
+
+    env.run(&[
+        "cell",
+        "add",
+        nb_path.to_str().unwrap(),
+        "--source",
+        "x = 10",
+    ])
+    .assert_success();
+
+    env.run(&[
+        "cell",
+        "add",
+        nb_path.to_str().unwrap(),
+        "--source",
+        "result = 2 + 2",
+    ])
+    .assert_success();
+
+    // Execute last cell using -c -1 (space-separated style)
+    // This tests that allow_negative_numbers is properly configured
+    let result = env
+        .run(&["cell", "execute", nb_path.to_str().unwrap(), "-c", "-1"])
+        .assert_success();
+
+    assert!(result.contains("executed") || result.contains("success"));
+    assert!(result.contains("Cell index: 1"));
+}
+
+#[test]
 fn test_execute_dry_run() {
     let Some(env) = TestEnv::new() else {
         eprintln!("⚠️  Skipping test: execution environment not available");
