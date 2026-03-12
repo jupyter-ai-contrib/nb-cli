@@ -3,10 +3,10 @@ name = "nb-cli"
 version = "0.0.1"
 edition = "2021"
 description = "A command-line tool for reading, writing, and executing Jupyter notebooks"
-authors = ["Piyush Jain"]
+authors = ["Project Jupyter <jupyter@googlegroups.com>"]
 license = "BSD-3-Clause"
-repository = "https://github.com/3coins/nb-cli"
-homepage = "https://github.com/3coins/nb-cli"
+repository = "https://github.com/jupyter-ai-contrib/nb-cli"
+homepage = "https://github.com/jupyter-ai-contrib/nb-cli"
 keywords = ["jupyter", "notebooks", "cli", "ai"]
 categories = ["command-line-utilities", "development-tools"]
 
