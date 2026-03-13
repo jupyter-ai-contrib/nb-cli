@@ -5,7 +5,6 @@ pub mod connect;
 pub mod create_notebook;
 pub mod delete_cell;
 pub mod disconnect;
-pub mod execute_cell;
 pub mod execute_notebook;
 pub mod read;
 pub mod search;
