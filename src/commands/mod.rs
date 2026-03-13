@@ -9,5 +9,6 @@ pub mod execute_cell;
 pub mod execute_notebook;
 pub mod read;
 pub mod search;
+pub mod self_cmd;
 pub mod status;
 pub mod update_cell;

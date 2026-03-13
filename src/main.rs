@@ -41,6 +41,12 @@ enum Commands {
     Status(commands::status::StatusArgs),
     /// Disconnect from Jupyter server
     Disconnect(commands::disconnect::DisconnectArgs),
+    /// Manage nb CLI (version, update)
+    #[command(name = "self")]
+    SelfCmd {
+        #[command(subcommand)]
+        command: commands::self_cmd::SelfCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -78,6 +84,7 @@ fn main() {
         Commands::Connect(args) => commands::connect::execute(args),
         Commands::Status(args) => commands::status::execute(args),
         Commands::Disconnect(args) => commands::disconnect::execute(args),
+        Commands::SelfCmd { command } => commands::self_cmd::execute(command),
     };
 
     if let Err(e) = result {
