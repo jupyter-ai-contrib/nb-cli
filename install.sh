@@ -1,8 +1,18 @@
 #!/bin/bash
 set -e
 
-VERSION="v0.0.1"
 REPO="jupyter-ai-contrib/nb-cli"
+
+# Fetch latest release version
+echo "🔍 Fetching latest release version..."
+VERSION=$(curl -s https://api.github.com/repos/$REPO/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+
+if [ -z "$VERSION" ]; then
+    echo "❌ Failed to fetch latest version. Using fallback version v0.0.1"
+    VERSION="v0.0.1"
+fi
+
+echo "📦 Latest version: $VERSION"
 
 # Detect OS and architecture
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -39,7 +49,7 @@ case "$OS" in
         ;;
 esac
 
-echo "📦 Installing nb-cli $VERSION for $OS ($ARCH)..."
+echo "📦 Installing for $OS ($ARCH)..."
 echo ""
 
 # Download URL

@@ -1,0 +1,182 @@
+name: Prepare Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.0.2)'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  create-tag:
+    name: Create Tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.create_tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Update version in Cargo.toml
+        run: |
+          sed -i.bak 's/^version = ".*"/version = "${{ inputs.version }}"/' Cargo.toml
+          rm Cargo.toml.bak
+          git add Cargo.toml
+          git commit -m "Bump version to ${{ inputs.version }}"
+          git push
+
+      - name: Create and push tag
+        id: create_tag
+        run: |
+          TAG="v${{ inputs.version }}"
+          echo "Creating tag: $TAG"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: create-tag
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          # macOS Apple Silicon
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: nb
+            asset_name: nb-macos-arm64
+
+          # macOS Intel
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: nb
+            asset_name: nb-macos-amd64
+
+          # Linux x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: nb
+            asset_name: nb-linux-amd64
+
+          # Linux ARM64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: nb
+            asset_name: nb-linux-arm64
+
+          # Windows
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: nb.exe
+            asset_name: nb-windows-amd64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.create-tag.outputs.tag }}
+
+      - name: Set up Rust cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Strip binary (Linux/macOS)
+        if: matrix.os != 'windows-latest'
+        run: strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+
+  create-draft-release:
+    name: Create Draft Release
+    needs: [create-tag, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.create-tag.outputs.tag }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f -exec cp {} release-assets/ \;
+          cd release-assets
+          chmod +x nb-* || true
+          ls -lh
+
+      - name: Generate checksums
+        run: |
+          cd release-assets
+          sha256sum * > SHA256SUMS || shasum -a 256 * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create Draft Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create ${{ needs.create-tag.outputs.tag }} \
+            --draft \
+            --title "${{ needs.create-tag.outputs.tag }}" \
+            --notes "Draft release for ${{ needs.create-tag.outputs.tag }}
+
+          See \`SHA256SUMS\` in the assets for checksums.
+
+          **Note**: Review the binaries before publishing." \
+            release-assets/*
+
+      - name: Summary
+        run: |
+          echo "## ✅ Draft Release Created" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag**: ${{ needs.create-tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Release**: https://github.com/${{ github.repository }}/releases/tag/${{ needs.create-tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Review the draft release" >> $GITHUB_STEP_SUMMARY
+          echo "2. Test the binaries" >> $GITHUB_STEP_SUMMARY
+          echo "3. Run the \`Release\` workflow to publish to crates.io and GitHub" >> $GITHUB_STEP_SUMMARY

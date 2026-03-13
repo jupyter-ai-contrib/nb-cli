@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  find-draft:
+    name: Find Draft Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.find_draft.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find draft release
+        id: find_draft
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DRAFT_TAG=$(gh release list --json isDraft,tagName --jq '.[] | select(.isDraft==true) | .tagName' | head -n 1)
+
+          if [ -z "$DRAFT_TAG" ]; then
+            echo "❌ No draft release found"
+            exit 1
+          fi
+
+          echo "Found draft release: $DRAFT_TAG"
+          echo "tag=$DRAFT_TAG" >> $GITHUB_OUTPUT
+
+  publish-crates:
+    name: Publish to crates.io
+    needs: find-draft
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for trusted publishing
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.find-draft.outputs.tag }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish to crates.io
+        run: cargo publish
+
+  publish-github:
+    name: Publish GitHub Release
+    needs: find-draft
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.find-draft.outputs.tag }}
+
+      - name: Publish Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit ${{ needs.find-draft.outputs.tag }} --draft=false
+
+      - name: Summary
+        run: |
+          echo "## ✅ Release Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag**: ${{ needs.find-draft.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Release**: https://github.com/${{ github.repository }}/releases/tag/${{ needs.find-draft.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Crates.io**: https://crates.io/crates/nb-cli" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Verify the release on GitHub" >> $GITHUB_STEP_SUMMARY
+          echo "2. Check that crates.io shows the new version" >> $GITHUB_STEP_SUMMARY
+          echo "3. Test installation: \`cargo install nb-cli\`" >> $GITHUB_STEP_SUMMARY
