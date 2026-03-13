@@ -24,6 +24,7 @@ pub struct UpdateCellArgs {
         short = 'i',
         long = "cell-index",
         value_name = "INDEX",
+        allow_negative_numbers = true,
         conflicts_with = "cell"
     )]
     pub cell_index: Option<i32>,

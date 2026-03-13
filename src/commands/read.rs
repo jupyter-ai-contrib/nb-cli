@@ -27,7 +27,7 @@ pub struct ReadArgs {
     pub cell: Option<String>,
 
     /// Get specific cell by index (supports negative indexing like -1)
-    #[arg(short = 'i', long = "cell-index", value_name = "INDEX", conflicts_with_all = ["cell", "only_code", "only_markdown"])]
+    #[arg(short = 'i', long = "cell-index", value_name = "INDEX", allow_negative_numbers = true, conflicts_with_all = ["cell", "only_code", "only_markdown"])]
     pub cell_index: Option<i32>,
 
     /// Include cell execution outputs in the display

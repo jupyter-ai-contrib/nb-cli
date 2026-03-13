@@ -280,7 +280,7 @@ fn test_read_last_cell_negative_index() {
     let nb_path = env.copy_fixture("with_code.ipynb", "test.ipynb");
 
     let result = env
-        .run(&["read", nb_path.to_str().unwrap(), "--cell-index=-1"])
+        .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "-1"])
         .assert_success();
 
     let json = result.json_value();
@@ -528,7 +528,8 @@ fn test_add_cell_with_negative_index() {
             nb_path.to_str().unwrap(),
             "--source",
             "before last",
-            "--insert-at=-1",
+            "--insert-at",
+            "-1",
         ])
         .assert_success();
 
@@ -743,14 +744,15 @@ fn test_update_cell_negative_index() {
         "cell",
         "update",
         nb_path.to_str().unwrap(),
-        "--cell-index=-1",
+        "--cell-index",
+        "-1",
         "--source",
         "updated last cell",
     ])
     .assert_success();
 
     let result = env
-        .run(&["read", nb_path.to_str().unwrap(), "--cell-index=-1"])
+        .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "-1"])
         .assert_success();
     let json = result.json_value();
     let source = join_source(&json["source"]);
@@ -821,7 +823,7 @@ fn test_delete_with_negative_index() {
     let nb_path = env.copy_fixture("with_code.ipynb", "test.ipynb");
 
     let result = env
-        .run(&["cell", "delete", nb_path.to_str().unwrap(), "--cell-index=-1"])
+        .run(&["cell", "delete", nb_path.to_str().unwrap(), "--cell-index", "-1"])
         .assert_success();
 
     let json = result.json_value();
@@ -964,6 +966,19 @@ fn test_clear_outputs_specific_cell() {
 
     let result = env
         .run(&["output", "clear", nb_path.to_str().unwrap(), "--cell-index", "0"])
+        .assert_success();
+
+    let json = result.json_value();
+    assert_eq!(json["cells_cleared"], 1);
+}
+
+#[test]
+fn test_clear_outputs_negative_index() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("with_outputs.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["output", "clear", nb_path.to_str().unwrap(), "--cell-index", "-1"])
         .assert_success();
 
     let json = result.json_value();

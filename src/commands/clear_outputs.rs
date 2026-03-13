@@ -22,7 +22,7 @@ pub struct ClearOutputsArgs {
     pub cell: Option<String>,
 
     /// Clear specific cell by index (supports negative indexing)
-    #[arg(short = 'i', long = "cell-index", value_name = "INDEX", conflicts_with_all = ["cell", "all"])]
+    #[arg(short = 'i', long = "cell-index", value_name = "INDEX", allow_negative_numbers = true, conflicts_with_all = ["cell", "all"])]
     pub cell_index: Option<i32>,
 
     /// Clear all code cell outputs (default if no options)

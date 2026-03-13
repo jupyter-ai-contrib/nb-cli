@@ -26,7 +26,7 @@ pub struct AddCellArgs {
     pub source: String,
 
     /// Insert at index (supports negative, default: append)
-    #[arg(short = 'i', long = "insert-at", value_name = "INDEX", conflicts_with_all = ["after", "before"])]
+    #[arg(short = 'i', long = "insert-at", value_name = "INDEX", allow_negative_numbers = true, conflicts_with_all = ["after", "before"])]
     pub insert_at: Option<i32>,
 
     /// Insert after cell with ID

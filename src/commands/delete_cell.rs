@@ -22,7 +22,7 @@ pub struct DeleteCellArgs {
     pub cell: Vec<String>,
 
     /// Cell index(es) to delete (supports negative indexing)
-    #[arg(short = 'i', long = "cell-index", value_name = "INDEX", conflicts_with_all = ["cell", "range"])]
+    #[arg(short = 'i', long = "cell-index", value_name = "INDEX", allow_negative_numbers = true, conflicts_with_all = ["cell", "range"])]
     pub cell_index: Vec<i32>,
 
     /// Delete range [start, end) (exclusive end)

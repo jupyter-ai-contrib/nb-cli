@@ -34,11 +34,11 @@ pub struct ExecuteNotebookArgs {
     pub cell_index: Option<i32>,
 
     /// Start cell index (inclusive)
-    #[arg(long, conflicts_with_all = ["cell", "cell_index"])]
+    #[arg(long, allow_negative_numbers = true, conflicts_with_all = ["cell", "cell_index"])]
     pub start: Option<i32>,
 
     /// End cell index (inclusive)
-    #[arg(long, conflicts_with_all = ["cell", "cell_index"])]
+    #[arg(long, allow_negative_numbers = true, conflicts_with_all = ["cell", "cell_index"])]
     pub end: Option<i32>,
 
     /// Remote server URL (enables remote mode)
