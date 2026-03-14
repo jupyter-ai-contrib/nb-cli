@@ -21,6 +21,8 @@ enum Commands {
     Create(commands::create_notebook::CreateArgs),
     /// Read and extract notebook content
     Read(commands::read::ReadArgs),
+    /// View notebook in an interactive TUI
+    View(commands::view::ViewArgs),
     /// Execute cells in a notebook
     Execute(commands::execute_notebook::ExecuteNotebookArgs),
     /// Search for text and errors in notebook cells
@@ -71,6 +73,7 @@ fn main() {
     let result = match cli.command {
         Commands::Create(args) => commands::create_notebook::execute(args),
         Commands::Read(args) => commands::read::execute(args),
+        Commands::View(args) => commands::view::execute(args),
         Commands::Execute(args) => commands::execute_notebook::execute(args),
         Commands::Search(args) => commands::search::execute(args),
         Commands::Cell { command } => match command {

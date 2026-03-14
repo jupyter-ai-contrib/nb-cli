@@ -46,3 +46,9 @@ yrs = "0.21"
 # Shared async runtime
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
+
+# View command dependencies
+ratatui = "0.28"
+crossterm = "0.28"
+syntect = "5.2"
+notify = "6.1"

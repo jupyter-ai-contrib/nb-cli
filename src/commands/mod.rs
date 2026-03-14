@@ -11,3 +11,4 @@ pub mod search;
 pub mod self_cmd;
 pub mod status;
 pub mod update_cell;
+pub mod view;
