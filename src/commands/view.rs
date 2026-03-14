@@ -7,6 +7,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use nbformat::v4::{Cell, Output};
+use notify::{Watcher, RecursiveMode, Event as NotifyEvent, EventKind};
 use ratatui::{
     backend::{Backend, CrosstermBackend},
     layout::{Constraint, Direction, Layout, Rect},
@@ -16,6 +17,9 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::io;
+use std::path::PathBuf;
+use std::sync::mpsc;
+use std::time::Duration;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{FontStyle, ThemeSet};
 use syntect::parsing::SyntaxSet;
@@ -25,6 +29,10 @@ use syntect::util::LinesWithEndings;
 pub struct ViewArgs {
     /// Path to notebook file
     pub file: String,
+
+    /// Color scheme: dark, light, or auto (default: dark)
+    #[arg(long, default_value = "dark")]
+    pub theme: String,
 }
 
 struct App {
@@ -33,16 +41,39 @@ struct App {
     scroll_offset: u16,
     syntax_set: SyntaxSet,
     theme_set: ThemeSet,
+    is_dark_theme: bool,
+    file_path: PathBuf,
 }
 
 impl App {
-    fn new(notebook: nbformat::v4::Notebook) -> Self {
+    fn new(notebook: nbformat::v4::Notebook, theme: &str, file_path: PathBuf) -> Self {
+        let is_dark_theme = theme.to_lowercase() != "light";
         Self {
             notebook,
             selected_cell: 0,
             scroll_offset: 0,
             syntax_set: SyntaxSet::load_defaults_newlines(),
             theme_set: ThemeSet::load_defaults(),
+            is_dark_theme,
+            file_path,
+        }
+    }
+
+    fn reload(&mut self) -> Result<()> {
+        // Try to reload the notebook, preserving current position
+        match notebook::read_notebook(self.file_path.to_str().unwrap()) {
+            Ok(new_notebook) => {
+                self.notebook = new_notebook;
+                // Clamp selected cell to new notebook size
+                if self.selected_cell >= self.notebook.cells.len() {
+                    self.selected_cell = self.notebook.cells.len().saturating_sub(1);
+                }
+                Ok(())
+            }
+            Err(e) => {
+                // If reload fails, keep the old notebook
+                Err(e)
+            }
         }
     }
 
@@ -86,27 +117,457 @@ impl App {
         }
     }
 
+    fn get_cell_type_symbol(&self, cell: &Cell) -> &str {
+        match cell {
+            Cell::Code { .. } => "⚡",
+            Cell::Markdown { .. } => "▪",
+            Cell::Raw { .. } => "○",
+        }
+    }
+
+
+    // Convert RGB color to closest ANSI indexed color
+    fn rgb_to_ansi(&self, r: u8, g: u8, b: u8) -> Color {
+        // Calculate relative brightness
+        let brightness = (r as u16 + g as u16 + b as u16) / 3;
+
+        // Check if it's grayscale
+        let is_gray = (r as i16 - g as i16).abs() < 30
+                   && (g as i16 - b as i16).abs() < 30
+                   && (r as i16 - b as i16).abs() < 30;
+
+        if is_gray {
+            // Grayscale handling - different for light vs dark themes
+            if self.is_dark_theme {
+                // Dark theme: use brighter grays
+                if brightness < 60 {
+                    return Color::Indexed(0); // Black
+                } else if brightness < 120 {
+                    return Color::Indexed(8); // Bright Black (dark gray)
+                } else if brightness < 200 {
+                    return Color::Indexed(7); // White (light gray)
+                } else {
+                    return Color::Indexed(15); // Bright White
+                }
+            } else {
+                // Light theme: use darker grays
+                if brightness < 80 {
+                    return Color::Indexed(0); // Black
+                } else if brightness < 160 {
+                    return Color::Indexed(8); // Bright Black (gray) - good for comments
+                } else {
+                    return Color::Indexed(0); // Black - default text
+                }
+            }
+        }
+
+        // Determine dominant color channel
+        let max_channel = r.max(g).max(b);
+        let min_channel = r.min(g).min(b);
+        let saturation = max_channel - min_channel;
+
+        // Low saturation - treat as gray
+        if saturation < 40 {
+            if self.is_dark_theme {
+                return if brightness > 128 {
+                    Color::Indexed(7)  // White
+                } else {
+                    Color::Indexed(8)  // Bright Black (gray)
+                };
+            } else {
+                return if brightness > 128 {
+                    Color::Indexed(8)  // Gray
+                } else {
+                    Color::Indexed(0)  // Black
+                };
+            }
+        }
+
+        // Determine which color variant to use based on theme
+        // For dark themes: use bright colors (9-15) for better visibility
+        // For light themes: use normal colors (1-6) for better contrast
+        let use_bright = if self.is_dark_theme {
+            // Dark theme: bright if color is vibrant enough
+            max_channel > 180 || brightness > 150
+        } else {
+            // Light theme: never use bright (they're too light), always use normal
+            false
+        };
+
+        // Red channel dominant
+        if r >= g && r >= b {
+            if g > b + 40 {
+                // Red + Green = Yellow
+                return if use_bright {
+                    Color::Indexed(11) // Bright Yellow
+                } else {
+                    Color::Indexed(3)  // Yellow
+                };
+            } else if b > g + 40 {
+                // Red + Blue = Magenta
+                return if use_bright {
+                    Color::Indexed(13) // Bright Magenta
+                } else {
+                    Color::Indexed(5)  // Magenta
+                };
+            } else {
+                // Pure Red
+                return if use_bright {
+                    Color::Indexed(9)  // Bright Red
+                } else {
+                    Color::Indexed(1)  // Red
+                };
+            }
+        }
+
+        // Green channel dominant
+        if g >= r && g >= b {
+            if b > r + 40 {
+                // Green + Blue = Cyan
+                return if use_bright {
+                    Color::Indexed(14) // Bright Cyan
+                } else {
+                    Color::Indexed(6)  // Cyan
+                };
+            } else if r > b + 40 {
+                // Green + Red = Yellow
+                return if use_bright {
+                    Color::Indexed(11) // Bright Yellow
+                } else {
+                    Color::Indexed(3)  // Yellow
+                };
+            } else {
+                // Pure Green
+                return if use_bright {
+                    Color::Indexed(10) // Bright Green
+                } else {
+                    Color::Indexed(2)  // Green
+                };
+            }
+        }
+
+        // Blue channel dominant
+        if b >= r && b >= g {
+            if r > g + 40 {
+                // Blue + Red = Magenta
+                return if use_bright {
+                    Color::Indexed(13) // Bright Magenta
+                } else {
+                    Color::Indexed(5)  // Magenta
+                };
+            } else if g > r + 40 {
+                // Blue + Green = Cyan
+                return if use_bright {
+                    Color::Indexed(14) // Bright Cyan
+                } else {
+                    Color::Indexed(6)  // Cyan
+                };
+            } else {
+                // Pure Blue
+                return if use_bright {
+                    Color::Indexed(12) // Bright Blue
+                } else {
+                    Color::Indexed(4)  // Blue
+                };
+            }
+        }
+
+        // Fallback
+        Color::Indexed(7) // White
+    }
+
+    fn heading_color(&self, level: u8) -> Color {
+        if self.is_dark_theme {
+            match level {
+                1 => Color::Indexed(14), // Bright Cyan
+                2 => Color::Indexed(12), // Bright Blue
+                3 => Color::Indexed(6),  // Cyan
+                _ => Color::Indexed(4),  // Blue
+            }
+        } else {
+            match level {
+                1 => Color::Indexed(4),  // Blue
+                2 => Color::Indexed(6),  // Cyan
+                3 => Color::Indexed(12), // Bright Blue
+                _ => Color::Indexed(14), // Bright Cyan
+            }
+        }
+    }
+
+    // Helper methods for Python highlighter fallback (currently unused)
+    #[allow(dead_code)]
+    fn keyword_color(&self) -> Color {
+        if self.is_dark_theme {
+            Color::Indexed(13) // Bright Magenta
+        } else {
+            Color::Indexed(5)  // Magenta
+        }
+    }
+
+    #[allow(dead_code)]
+    fn string_color(&self) -> Color {
+        if self.is_dark_theme {
+            Color::Indexed(10) // Bright Green
+        } else {
+            Color::Indexed(2)  // Green
+        }
+    }
+
+    #[allow(dead_code)]
+    fn comment_color(&self) -> Color {
+        if self.is_dark_theme {
+            Color::Indexed(8)  // Bright Black (typically gray)
+        } else {
+            Color::Indexed(8)  // Same - comments should be subdued
+        }
+    }
+
+    #[allow(dead_code)]
+    fn number_color(&self) -> Color {
+        if self.is_dark_theme {
+            Color::Indexed(11) // Bright Yellow
+        } else {
+            Color::Indexed(3)  // Yellow
+        }
+    }
+
+    #[allow(dead_code)]
+    fn punctuation_color(&self) -> Color {
+        if self.is_dark_theme {
+            Color::Indexed(14) // Bright Cyan
+        } else {
+            Color::Indexed(6)  // Cyan
+        }
+    }
+
+    // Simple Python syntax highlighter (kept as fallback, currently unused)
+    // Syntect handles all languages including Python
+    #[allow(dead_code)]
+    fn highlight_python_simple(&self, code: &str) -> Vec<Line<'static>> {
+        let keywords = [
+            "import", "from", "as", "def", "class", "if", "elif", "else",
+            "for", "while", "return", "yield", "break", "continue", "pass",
+            "try", "except", "finally", "raise", "with", "async", "await",
+            "lambda", "and", "or", "not", "in", "is", "True", "False", "None",
+        ];
+
+        let keyword_color = self.keyword_color();
+        let string_color = self.string_color();
+        let comment_color = self.comment_color();
+        let number_color = self.number_color();
+        let punctuation_color = self.punctuation_color();
+
+        let mut lines = Vec::new();
+        for line_text in code.lines() {
+            let mut spans = Vec::new();
+            let mut current = String::new();
+            let mut in_string = false;
+            let mut string_char = ' ';
+            let mut in_comment = false;
+
+            let chars: Vec<char> = line_text.chars().collect();
+            let mut i = 0;
+
+            while i < chars.len() {
+                let ch = chars[i];
+
+                // Handle comments
+                if ch == '#' && !in_string {
+                    if !current.is_empty() {
+                        spans.push(Span::raw(current.clone()));
+                        current.clear();
+                    }
+                    in_comment = true;
+                    current.push(ch);
+                    i += 1;
+                    continue;
+                }
+
+                if in_comment {
+                    current.push(ch);
+                    i += 1;
+                    continue;
+                }
+
+                // Handle strings
+                if (ch == '"' || ch == '\'') && !in_string {
+                    // Check for triple quotes
+                    if i + 2 < chars.len() && chars[i + 1] == ch && chars[i + 2] == ch {
+                        if !current.is_empty() {
+                            spans.push(Span::raw(current.clone()));
+                            current.clear();
+                        }
+                        let mut string_content = String::from("\"\"\"");
+                        i += 3;
+                        // Find end of triple quote string (simplified)
+                        while i < chars.len() {
+                            string_content.push(chars[i]);
+                            if i >= 2 && chars[i] == ch && chars[i-1] == ch && chars[i-2] == ch {
+                                break;
+                            }
+                            i += 1;
+                        }
+                        spans.push(Span::styled(
+                            string_content,
+                            Style::default().fg(string_color),
+                        ));
+                        i += 1;
+                        continue;
+                    }
+
+                    if !current.is_empty() {
+                        spans.push(Span::raw(current.clone()));
+                        current.clear();
+                    }
+                    in_string = true;
+                    string_char = ch;
+                    current.push(ch);
+                } else if in_string && ch == string_char {
+                    current.push(ch);
+                    spans.push(Span::styled(
+                        current.clone(),
+                        Style::default().fg(string_color),
+                    ));
+                    current.clear();
+                    in_string = false;
+                    string_char = ' ';
+                } else if in_string {
+                    current.push(ch);
+                } else if ch.is_whitespace() {
+                    if !current.is_empty() {
+                        // Check if current is a keyword
+                        if keywords.contains(&current.as_str()) {
+                            spans.push(Span::styled(
+                                current.clone(),
+                                Style::default()
+                                    .fg(keyword_color)
+                                    .add_modifier(Modifier::BOLD),
+                            ));
+                        } else if current.chars().all(|c| c.is_numeric() || c == '.' || c == '_') {
+                            // Numbers
+                            spans.push(Span::styled(
+                                current.clone(),
+                                Style::default().fg(number_color),
+                            ));
+                        } else {
+                            spans.push(Span::raw(current.clone()));
+                        }
+                        current.clear();
+                    }
+                    spans.push(Span::raw(ch.to_string()));
+                } else if "()[]{}:,;.".contains(ch) {
+                    if !current.is_empty() {
+                        if keywords.contains(&current.as_str()) {
+                            spans.push(Span::styled(
+                                current.clone(),
+                                Style::default()
+                                    .fg(keyword_color)
+                                    .add_modifier(Modifier::BOLD),
+                            ));
+                        } else {
+                            spans.push(Span::raw(current.clone()));
+                        }
+                        current.clear();
+                    }
+                    spans.push(Span::styled(
+                        ch.to_string(),
+                        Style::default().fg(punctuation_color),
+                    ));
+                } else {
+                    current.push(ch);
+                }
+
+                i += 1;
+            }
+
+            // Handle remaining content
+            if !current.is_empty() {
+                if in_comment {
+                    spans.push(Span::styled(
+                        current.clone(),
+                        Style::default().fg(comment_color),
+                    ));
+                } else if in_string {
+                    spans.push(Span::styled(
+                        current.clone(),
+                        Style::default().fg(string_color),
+                    ));
+                } else if keywords.contains(&current.as_str()) {
+                    spans.push(Span::styled(
+                        current.clone(),
+                        Style::default()
+                            .fg(keyword_color)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                } else {
+                    spans.push(Span::raw(current.clone()));
+                }
+            }
+
+            if spans.is_empty() {
+                spans.push(Span::raw(""));
+            }
+
+            lines.push(Line::from(spans));
+        }
+
+        lines
+    }
+
     fn get_cell_language(&self, cell: &Cell) -> String {
         match cell {
             Cell::Code { .. } => {
                 // Get language from notebook metadata
-                self.notebook
+                let lang = self.notebook
                     .metadata
                     .language_info
                     .as_ref()
                     .map(|li| li.name.clone())
-                    .unwrap_or_else(|| "python".to_string())
+                    .unwrap_or_else(|| "python".to_string());
+
+                // Capitalize first letter for syntect (e.g., "python" -> "Python")
+                if let Some(first) = lang.chars().next() {
+                    first.to_uppercase().collect::<String>() + &lang[1..]
+                } else {
+                    "Python".to_string()
+                }
             }
-            _ => "markdown".to_string(),
+            _ => "Markdown".to_string(),
         }
     }
 
     fn highlight_code(&self, code: &str, language: &str) -> Vec<Line<'static>> {
-        let theme = &self.theme_set.themes["base16-ocean.dark"];
-        let syntax = self
-            .syntax_set
-            .find_syntax_by_name(language)
-            .or_else(|| self.syntax_set.find_syntax_by_extension(language))
+        // Try multiple themes in order of preference - use vibrant dark themes
+        let theme = self.theme_set.themes.get("base16-eighties.dark")
+            .or_else(|| self.theme_set.themes.get("base16-mocha.dark"))
+            .or_else(|| self.theme_set.themes.get("base16-ocean.dark"))
+            .unwrap_or_else(|| self.theme_set.themes.values().next().unwrap());
+
+        // Try to find syntax by name first, then by common aliases
+        let syntax = self.syntax_set.find_syntax_by_name(language)
+            .or_else(|| {
+                // Try lowercase version
+                self.syntax_set.find_syntax_by_name(&language.to_lowercase())
+            })
+            .or_else(|| {
+                // Try as extension
+                self.syntax_set.find_syntax_by_extension(&language.to_lowercase())
+            })
+            .or_else(|| {
+                // Common language mappings
+                match language.to_lowercase().as_str() {
+                    "python" | "py" => self.syntax_set.find_syntax_by_extension("py"),
+                    "javascript" | "js" => self.syntax_set.find_syntax_by_extension("js"),
+                    "typescript" | "ts" => self.syntax_set.find_syntax_by_extension("ts"),
+                    "rust" | "rs" => self.syntax_set.find_syntax_by_extension("rs"),
+                    "java" => self.syntax_set.find_syntax_by_extension("java"),
+                    "cpp" | "c++" => self.syntax_set.find_syntax_by_extension("cpp"),
+                    "c" => self.syntax_set.find_syntax_by_extension("c"),
+                    "ruby" | "rb" => self.syntax_set.find_syntax_by_extension("rb"),
+                    "go" => self.syntax_set.find_syntax_by_extension("go"),
+                    _ => None,
+                }
+            })
             .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text());
 
         let mut highlighter = HighlightLines::new(syntax, theme);
@@ -131,10 +592,13 @@ impl App {
                     modifier |= Modifier::UNDERLINED;
                 }
 
+                // Convert RGB to closest ANSI color
+                let color = self.rgb_to_ansi(fg.r, fg.g, fg.b);
+
                 spans.push(Span::styled(
                     text.to_string(),
                     Style::default()
-                        .fg(Color::Rgb(fg.r, fg.g, fg.b))
+                        .fg(color)
                         .add_modifier(modifier),
                 ));
             }
@@ -145,16 +609,47 @@ impl App {
     }
 
     fn render_markdown(&self, markdown: &str) -> Vec<Line<'static>> {
-        // Simple markdown rendering - could be enhanced with termimad
         let mut lines = Vec::new();
+        let mut in_code_block = false;
+        let mut code_block_content = String::new();
+        let mut code_block_language = String::new();
 
         for line in markdown.lines() {
+            // Handle code blocks
+            if line.starts_with("```") {
+                if in_code_block {
+                    // End of code block - highlight and add it
+                    if !code_block_content.is_empty() {
+                        let highlighted = self.highlight_code(&code_block_content, &code_block_language);
+                        lines.extend(highlighted);
+                    }
+                    code_block_content.clear();
+                    code_block_language.clear();
+                    in_code_block = false;
+                } else {
+                    // Start of code block
+                    in_code_block = true;
+                    code_block_language = line[3..].trim().to_string();
+                    if code_block_language.is_empty() {
+                        code_block_language = "python".to_string();
+                    }
+                }
+                continue;
+            }
+
+            if in_code_block {
+                code_block_content.push_str(line);
+                code_block_content.push('\n');
+                continue;
+            }
+
+            // Headings
             if line.starts_with("# ") {
                 lines.push(Line::from(vec![
                     Span::styled(
                         line.to_string(),
                         Style::default()
-                            .fg(Color::Cyan)
+                            .fg(self.heading_color(1))
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]));
@@ -163,28 +658,202 @@ impl App {
                     Span::styled(
                         line.to_string(),
                         Style::default()
-                            .fg(Color::Blue)
+                            .fg(self.heading_color(2))
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]));
-            } else if line.starts_with("**") && line.ends_with("**") {
+            } else if line.starts_with("### ") {
                 lines.push(Line::from(vec![
                     Span::styled(
                         line.to_string(),
-                        Style::default().add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(self.heading_color(3))
+                            .add_modifier(Modifier::BOLD),
                     ),
                 ]));
-            } else if line.starts_with("- ") || line.starts_with("* ") {
+            } else if line.starts_with("#### ") {
                 lines.push(Line::from(vec![
-                    Span::styled("  • ", Style::default().fg(Color::Yellow)),
-                    Span::raw(line[2..].to_string()),
+                    Span::styled(
+                        line.to_string(),
+                        Style::default()
+                            .fg(self.heading_color(4))
+                            .add_modifier(Modifier::BOLD),
+                    ),
                 ]));
+            // Horizontal rule
+            } else if line.trim() == "---" || line.trim() == "***" || line.trim() == "___" {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        "─".repeat(60),
+                        Style::default().fg(Color::Indexed(8)), // Bright Black (gray)
+                    ),
+                ]));
+            // Block quote
+            } else if line.starts_with("> ") {
+                let quote_color = if self.is_dark_theme { Color::Indexed(11) } else { Color::Indexed(4) }; // Yellow/Blue
+                lines.push(Line::from(vec![
+                    Span::styled("┃ ", Style::default().fg(quote_color)),
+                    Span::styled(
+                        line[2..].to_string(),
+                        Style::default().fg(quote_color),
+                    ),
+                ]));
+            // Lists
+            } else if line.starts_with("- ") || line.starts_with("* ") {
+                let content = self.parse_inline_markdown(&line[2..]);
+                let list_color = if self.is_dark_theme { Color::Indexed(11) } else { Color::Indexed(4) }; // Yellow/Blue
+                let mut spans = vec![Span::styled("  • ", Style::default().fg(list_color))];
+                spans.extend(content);
+                lines.push(Line::from(spans));
+            } else if line.trim_start().chars().next().map_or(false, |c| c.is_numeric())
+                && line.contains(". ") {
+                // Numbered list
+                if let Some(pos) = line.find(". ") {
+                    let number = &line[..pos].trim_start();
+                    let content = self.parse_inline_markdown(&line[pos + 2..]);
+                    let list_color = if self.is_dark_theme { Color::Indexed(11) } else { Color::Indexed(4) }; // Yellow/Blue
+                    let mut spans = vec![
+                        Span::styled(format!(" {} ", number), Style::default().fg(list_color)),
+                    ];
+                    spans.extend(content);
+                    lines.push(Line::from(spans));
+                } else {
+                    lines.push(Line::from(self.parse_inline_markdown(line)));
+                }
             } else {
-                lines.push(Line::from(line.to_string()));
+                // Regular text with inline formatting
+                lines.push(Line::from(self.parse_inline_markdown(line)));
             }
         }
 
+        // Handle unclosed code block
+        if in_code_block && !code_block_content.is_empty() {
+            let highlighted = self.highlight_code(&code_block_content, &code_block_language);
+            lines.extend(highlighted);
+        }
+
         lines
+    }
+
+    fn parse_inline_markdown(&self, text: &str) -> Vec<Span<'static>> {
+        let mut spans = Vec::new();
+        let mut current = String::new();
+        let mut chars = text.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            match ch {
+                '`' => {
+                    // Inline code
+                    if !current.is_empty() {
+                        spans.push(Span::raw(current.clone()));
+                        current.clear();
+                    }
+                    let mut code = String::new();
+                    while let Some(&next_ch) = chars.peek() {
+                        if next_ch == '`' {
+                            chars.next();
+                            break;
+                        }
+                        code.push(chars.next().unwrap());
+                    }
+                    spans.push(Span::styled(
+                        code,
+                        Style::default()
+                            .fg(self.string_color())
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                }
+                '*' => {
+                    if chars.peek() == Some(&'*') {
+                        // Bold **text**
+                        chars.next();
+                        if !current.is_empty() {
+                            spans.push(Span::raw(current.clone()));
+                            current.clear();
+                        }
+                        let mut bold = String::new();
+                        while let Some(ch) = chars.next() {
+                            if ch == '*' && chars.peek() == Some(&'*') {
+                                chars.next();
+                                break;
+                            }
+                            bold.push(ch);
+                        }
+                        spans.push(Span::styled(
+                            bold,
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ));
+                    } else {
+                        // Italic *text*
+                        if !current.is_empty() {
+                            spans.push(Span::raw(current.clone()));
+                            current.clear();
+                        }
+                        let mut italic = String::new();
+                        while let Some(ch) = chars.next() {
+                            if ch == '*' {
+                                break;
+                            }
+                            italic.push(ch);
+                        }
+                        spans.push(Span::styled(
+                            italic,
+                            Style::default().add_modifier(Modifier::ITALIC),
+                        ));
+                    }
+                }
+                '_' => {
+                    if chars.peek() == Some(&'_') {
+                        // Bold __text__
+                        chars.next();
+                        if !current.is_empty() {
+                            spans.push(Span::raw(current.clone()));
+                            current.clear();
+                        }
+                        let mut bold = String::new();
+                        while let Some(ch) = chars.next() {
+                            if ch == '_' && chars.peek() == Some(&'_') {
+                                chars.next();
+                                break;
+                            }
+                            bold.push(ch);
+                        }
+                        spans.push(Span::styled(
+                            bold,
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ));
+                    } else {
+                        // Italic _text_
+                        if !current.is_empty() {
+                            spans.push(Span::raw(current.clone()));
+                            current.clear();
+                        }
+                        let mut italic = String::new();
+                        while let Some(ch) = chars.next() {
+                            if ch == '_' {
+                                break;
+                            }
+                            italic.push(ch);
+                        }
+                        spans.push(Span::styled(
+                            italic,
+                            Style::default().add_modifier(Modifier::ITALIC),
+                        ));
+                    }
+                }
+                _ => current.push(ch),
+            }
+        }
+
+        if !current.is_empty() {
+            spans.push(Span::raw(current));
+        }
+
+        if spans.is_empty() {
+            spans.push(Span::raw(text.to_string()));
+        }
+
+        spans
     }
 
     fn get_cell_source(&self, cell: &Cell) -> String {
@@ -199,7 +868,7 @@ impl App {
                 lines.push(Line::from(vec![
                     Span::styled(
                         format!("[{}] ", name),
-                        Style::default().fg(Color::Green),
+                        Style::default().fg(Color::Indexed(10)), // Bright Green
                     ),
                 ]));
                 for line in text.0.lines() {
@@ -210,7 +879,7 @@ impl App {
                 lines.push(Line::from(vec![
                     Span::styled(
                         format!("[Out {}] ", result.execution_count),
-                        Style::default().fg(Color::Blue),
+                        Style::default().fg(Color::Indexed(12)), // Bright Blue
                     ),
                 ]));
                 // Simple text output for now
@@ -228,7 +897,7 @@ impl App {
             }
             Output::DisplayData(data) => {
                 lines.push(Line::from(vec![
-                    Span::styled("[Display] ", Style::default().fg(Color::Magenta)),
+                    Span::styled("[Display] ", Style::default().fg(Color::Indexed(13))), // Bright Magenta
                 ]));
                 if let Ok(json_val) = serde_json::to_value(&data.data) {
                     if let Some(obj) = json_val.as_object() {
@@ -246,13 +915,13 @@ impl App {
                 lines.push(Line::from(vec![
                     Span::styled(
                         format!("Error: {}", error.ename),
-                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                        Style::default().fg(Color::Indexed(9)).add_modifier(Modifier::BOLD), // Bright Red
                     ),
                 ]));
                 lines.push(Line::from(vec![
                     Span::styled(
                         format!("  {}", error.evalue),
-                        Style::default().fg(Color::Red),
+                        Style::default().fg(Color::Indexed(9)), // Bright Red
                     ),
                 ]));
             }
@@ -263,7 +932,24 @@ impl App {
 }
 
 pub fn execute(args: ViewArgs) -> Result<()> {
+    let file_path = PathBuf::from(&args.file);
     let notebook = notebook::read_notebook(&args.file)?;
+
+    // Setup file watcher
+    let (tx, rx) = mpsc::channel();
+    let mut watcher = notify::recommended_watcher(move |res: Result<NotifyEvent, notify::Error>| {
+        if let Ok(event) = res {
+            // Only notify on modify events
+            if matches!(event.kind, EventKind::Modify(_)) {
+                let _ = tx.send(());
+            }
+        }
+    })?;
+
+    // Watch the parent directory (watching the file directly can miss some editors)
+    if let Some(parent) = file_path.parent() {
+        watcher.watch(parent, RecursiveMode::NonRecursive)?;
+    }
 
     // Setup terminal
     enable_raw_mode()?;
@@ -273,8 +959,8 @@ pub fn execute(args: ViewArgs) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Create app and run
-    let app = App::new(notebook);
-    let res = run_app(&mut terminal, app);
+    let app = App::new(notebook, &args.theme, file_path);
+    let res = run_app(&mut terminal, app, rx);
 
     // Restore terminal
     disable_raw_mode()?;
@@ -292,31 +978,44 @@ pub fn execute(args: ViewArgs) -> Result<()> {
     Ok(())
 }
 
-fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<()> {
+fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App, file_change_rx: mpsc::Receiver<()>) -> io::Result<()> {
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
 
-        if let Event::Key(key) = event::read()? {
-            if key.kind == KeyEventKind::Press {
-                match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                    KeyCode::Char('j') | KeyCode::Down => app.next_cell(),
-                    KeyCode::Char('k') | KeyCode::Up => app.previous_cell(),
-                    KeyCode::Char('d') => app.scroll_down(),
-                    KeyCode::Char('u') => app.scroll_up(),
-                    KeyCode::Char('g') => app.jump_to_first(),
-                    KeyCode::Char('G') => app.jump_to_last(),
-                    KeyCode::PageDown => {
-                        for _ in 0..5 {
-                            app.next_cell();
+        // Check for file changes (non-blocking)
+        if file_change_rx.try_recv().is_ok() {
+            // File changed, reload the notebook
+            let _ = app.reload();
+        }
+
+        // Check for keyboard events with a timeout so we can check file changes periodically
+        if event::poll(Duration::from_millis(100))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                        KeyCode::Char('j') | KeyCode::Down => app.next_cell(),
+                        KeyCode::Char('k') | KeyCode::Up => app.previous_cell(),
+                        KeyCode::Char('d') => app.scroll_down(),
+                        KeyCode::Char('u') => app.scroll_up(),
+                        KeyCode::Char('g') => app.jump_to_first(),
+                        KeyCode::Char('G') => app.jump_to_last(),
+                        KeyCode::Char('r') => {
+                            // Manual reload with 'r' key
+                            let _ = app.reload();
                         }
-                    }
-                    KeyCode::PageUp => {
-                        for _ in 0..5 {
-                            app.previous_cell();
+                        KeyCode::PageDown => {
+                            for _ in 0..5 {
+                                app.next_cell();
+                            }
                         }
+                        KeyCode::PageUp => {
+                            for _ in 0..5 {
+                                app.previous_cell();
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
         }
@@ -366,7 +1065,7 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
         Span::raw(format!(" | Kernel: {} | ", kernel)),
         Span::styled(
             format!("{} cells", app.notebook.cells.len()),
-            Style::default().fg(Color::Cyan),
+            Style::default().fg(Color::Indexed(14)), // Bright Cyan
         ),
     ];
 
@@ -383,7 +1082,7 @@ fn render_cell_list(f: &mut Frame, app: &App, area: Rect) {
         .iter()
         .enumerate()
         .map(|(i, cell)| {
-            let cell_type = app.get_cell_type_str(cell);
+            let cell_symbol = app.get_cell_type_symbol(cell);
             let exec_marker = match cell {
                 Cell::Code {
                     execution_count, ..
@@ -408,13 +1107,13 @@ fn render_cell_list(f: &mut Frame, app: &App, area: Rect) {
 
             let style = if i == app.selected_cell {
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(Color::Indexed(11)) // Bright Yellow
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
 
-            let content = format!("{:2} [{}]{} {}", i, cell_type, exec_marker, preview);
+            let content = format!("{:2} {}{} {}", i, cell_symbol, exec_marker, preview);
             ListItem::new(content).style(style)
         })
         .collect();
@@ -423,7 +1122,7 @@ fn render_cell_list(f: &mut Frame, app: &App, area: Rect) {
         .block(Block::default().borders(Borders::ALL).title("Cells"))
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(Color::Indexed(8)) // Bright Black (gray background)
                 .add_modifier(Modifier::BOLD),
         );
 
@@ -453,13 +1152,17 @@ fn render_cell_detail(f: &mut Frame, app: &mut App, area: Rect) {
                 content_lines.push(Line::from(vec![
                     Span::styled(
                         "─".repeat(40),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(Color::Indexed(8)), // Bright Black (gray)
                     ),
                 ]));
+                let output_header = match execution_count {
+                    Some(n) => format!("Outputs (exec: {})", n),
+                    None => "Outputs".to_string(),
+                };
                 content_lines.push(Line::from(vec![
                     Span::styled(
-                        format!("Outputs (exec: {:?})", execution_count),
-                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        output_header,
+                        Style::default().fg(Color::Indexed(10)).add_modifier(Modifier::BOLD), // Bright Green
                     ),
                 ]));
                 content_lines.push(Line::from(""));
@@ -485,15 +1188,17 @@ fn render_cell_detail(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_footer(f: &mut Frame, area: Rect) {
     let help_text = vec![
-        Span::styled("j/↓", Style::default().fg(Color::Yellow)),
+        Span::styled("j/↓", Style::default().fg(Color::Indexed(11))), // Bright Yellow
         Span::raw(" Next | "),
-        Span::styled("k/↑", Style::default().fg(Color::Yellow)),
+        Span::styled("k/↑", Style::default().fg(Color::Indexed(11))), // Bright Yellow
         Span::raw(" Prev | "),
-        Span::styled("d/u", Style::default().fg(Color::Yellow)),
+        Span::styled("d/u", Style::default().fg(Color::Indexed(11))), // Bright Yellow
         Span::raw(" Scroll | "),
-        Span::styled("g/G", Style::default().fg(Color::Yellow)),
+        Span::styled("g/G", Style::default().fg(Color::Indexed(11))), // Bright Yellow
         Span::raw(" First/Last | "),
-        Span::styled("q/Esc", Style::default().fg(Color::Red)),
+        Span::styled("r", Style::default().fg(Color::Indexed(10))), // Bright Green
+        Span::raw(" Reload | "),
+        Span::styled("q/Esc", Style::default().fg(Color::Indexed(9))), // Bright Red
         Span::raw(" Quit"),
     ];
 
