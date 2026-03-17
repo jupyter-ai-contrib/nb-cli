@@ -214,7 +214,10 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
 
         // Print progress (only in text mode)
         if matches!(format, OutputFormat::Text) {
-            eprintln!("Executing cell {} of {}...", code_cell_num, total_code_cells);
+            eprintln!(
+                "Executing cell {} of {}...",
+                code_cell_num, total_code_cells
+            );
         }
 
         // Execute cell

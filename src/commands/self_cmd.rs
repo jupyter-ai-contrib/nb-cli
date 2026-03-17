@@ -34,12 +34,9 @@ fn execute_version() -> Result<()> {
 
 fn execute_update() -> Result<()> {
     // Use tokio runtime since we're in a sync context
-    let rt = tokio::runtime::Runtime::new()
-        .context("Failed to create async runtime")?;
+    let rt = tokio::runtime::Runtime::new().context("Failed to create async runtime")?;
 
-    rt.block_on(async {
-        execute_update_async().await
-    })
+    rt.block_on(async { execute_update_async().await })
 }
 
 async fn execute_update_async() -> Result<()> {
@@ -64,8 +61,7 @@ async fn execute_update_async() -> Result<()> {
     }
 
     // Get current binary path
-    let current_exe = env::current_exe()
-        .context("Failed to get current executable path")?;
+    let current_exe = env::current_exe().context("Failed to get current executable path")?;
 
     println!("📍 Current installation: {}", current_exe.display());
 
@@ -109,8 +105,7 @@ async fn execute_update_async() -> Result<()> {
             println!("⚠️  Warning: Could not create backup: {}", e);
         }
 
-        fs::copy(&temp_file, &current_exe)
-            .context("Failed to replace binary")?;
+        fs::copy(&temp_file, &current_exe).context("Failed to replace binary")?;
 
         // Remove backup
         let _ = fs::remove_file(&backup);
@@ -118,8 +113,7 @@ async fn execute_update_async() -> Result<()> {
 
     #[cfg(windows)]
     {
-        fs::copy(&temp_file, &current_exe)
-            .context("Failed to replace binary")?;
+        fs::copy(&temp_file, &current_exe).context("Failed to replace binary")?;
     }
 
     // Clean up temp file
@@ -145,10 +139,7 @@ async fn fetch_latest_version() -> Result<String> {
         .context("Failed to fetch release info from GitHub")?;
 
     if !response.status().is_success() {
-        return Err(anyhow!(
-            "GitHub API returned error: {}",
-            response.status()
-        ));
+        return Err(anyhow!("GitHub API returned error: {}", response.status()));
     }
 
     let release: GithubRelease = response
@@ -203,8 +194,7 @@ async fn download_binary(url: &str, dest: &PathBuf) -> Result<()> {
         .await
         .context("Failed to read download response")?;
 
-    fs::write(dest, bytes)
-        .context("Failed to write binary to disk")?;
+    fs::write(dest, bytes).context("Failed to write binary to disk")?;
 
     Ok(())
 }

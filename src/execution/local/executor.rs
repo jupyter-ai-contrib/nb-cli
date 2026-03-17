@@ -267,13 +267,10 @@ impl ExecutionBackend for LocalExecutor {
         self.connection_info = Some(connection_info.clone());
 
         // Create ZeroMQ connections
-        let iopub_socket = runtimelib::create_client_iopub_connection(
-            &connection_info,
-            "",
-            &self.session_id,
-        )
-        .await
-        .context("Failed to create IOPub socket")?;
+        let iopub_socket =
+            runtimelib::create_client_iopub_connection(&connection_info, "", &self.session_id)
+                .await
+                .context("Failed to create IOPub socket")?;
 
         let identity = runtimelib::peer_identity_for_session(&self.session_id)
             .context("Failed to create peer identity")?;
@@ -313,7 +310,8 @@ impl ExecutionBackend for LocalExecutor {
         // Clean up connection file
         if self.connection_info.is_some() {
             let runtime_dir = runtimelib::dirs::runtime_dir();
-            let connection_path = runtime_dir.join(format!("kernel-nb-cli-{}.json", self.session_id));
+            let connection_path =
+                runtime_dir.join(format!("kernel-nb-cli-{}.json", self.session_id));
             let _ = tokio::fs::remove_file(&connection_path).await;
         }
 
