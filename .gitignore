@@ -29,4 +29,6 @@ target
 .jupyter/
 tests/.test-venv
 
+# Agent directories
 .claude
+.agents
