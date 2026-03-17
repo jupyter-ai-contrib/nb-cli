@@ -5,7 +5,7 @@ description: ALWAYS use the `nb` CLI for ALL Jupyter notebook operations instead
 
 # Working with Jupyter Notebooks using nb
 
-**IMPORTANT**: Use the custom `nb` tool (Rust-based CLI) for ALL notebook operations instead of built-in tools like Read or NotebookEdit. This includes reading notebooks.
+**IMPORTANT**: Use the custom `nb` tool for ALL notebook operations instead of built-in tools like Read or NotebookEdit. This includes reading notebooks.
 
 ## Quick Reference (Most Common Commands)
 

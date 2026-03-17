@@ -44,6 +44,42 @@ cargo build --release
 
 The binary will be available at `target/release/nb`.
 
+## AI Agent Integration
+
+To enable AI agents (like Claude Code) to work seamlessly with Jupyter notebooks using `nb`:
+
+### Install the Skill
+
+**Option 1: Using the Vercel Skills Tool (Recommended)**
+
+```bash
+npx skills install jupyter-ai-contrib/nb-cli
+```
+
+**Option 2: Manual Installation**
+
+Copy the skill directory to your agent's skill location:
+- **Claude Code/Cline**: `~/.claude/skills/notebook-cli/` or `~/.cline/skills/notebook-cli/`
+- **Other agents**: Consult your agent's documentation for the skills directory
+
+```bash
+# Example for Claude Code
+mkdir -p ~/.claude/skills/notebook-cli
+cp -r skills/notebook-cli/* ~/.claude/skills/notebook-cli/
+```
+
+### Configure Your Agent
+
+Add the following instruction to your project's agent configuration file (`CLAUDE.md`, `AGENTS.md`, `.cursorrules`, etc.):
+
+```markdown
+## Working with Notebooks (.ipynb files)
+
+When the user asks to read, edit, execute, or work with .ipynb files, use the notebook-cli skill, which provides the `nb` command-line tool. Do not use the built-in Read/Write tools for `.ipynb` files.
+```
+
+This ensures your AI agent uses the `nb` CLI for all notebook operations instead of attempting to parse JSON directly.
+
 ## Quick Start
 
 ```bash
