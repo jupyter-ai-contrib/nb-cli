@@ -182,11 +182,6 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     let mut execution_results: HashMap<usize, crate::execution::types::ExecutionResult> =
         HashMap::new();
 
-    // Count total code cells in range for progress reporting
-    let total_code_cells = notebook.cells[start_idx..=end_idx]
-        .iter()
-        .filter(|cell| matches!(cell, Cell::Code { .. }))
-        .count();
     let mut code_cell_num = 0;
 
     for (i, cell) in notebook.cells.iter().enumerate() {
@@ -205,11 +200,6 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         // Get cell source and cell_id
         let source = crate::commands::common::cell_to_string(cell);
         let cell_id = crate::commands::common::cell_id_to_string(cell);
-
-        // Print progress (only in text mode)
-        if matches!(args.format, OutputFormat::Text) {
-            eprintln!("Executing cell {} of {}...", code_cell_num, total_code_cells);
-        }
 
         // Execute cell
         match backend.execute_code(&source, Some(&cell_id)).await {
@@ -279,8 +269,6 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
 
             match YDocClient::connect(server_url.clone(), token.clone(), notebook_path).await {
                 Ok(mut ydoc_client) => {
-                    eprintln!("\nSyncing outputs to JupyterLab via Y.js...");
-
                     // Update each executed cell's outputs and execution_count
                     for (i, result) in &execution_results {
                         // Update outputs
@@ -303,7 +291,6 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
                     // Sync changes to server
                     match ydoc_client.sync().await {
                         Ok(_) => {
-                            eprintln!("✓ Outputs synced to JupyterLab in real-time");
                         }
                         Err(e) => {
                             eprintln!("  Warning: Failed to sync Y.js updates: {}", e);
