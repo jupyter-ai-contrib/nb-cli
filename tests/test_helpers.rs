@@ -56,17 +56,15 @@ fn initialize_venv() -> Option<PathBuf> {
         }
     }
 
-    // Install dependencies using uv pip from requirements.txt
-    eprintln!("📦 Installing nbclient, nbformat, and ipykernel...");
-    let requirements_file = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("requirements.txt");
+    // Install ipykernel for Python kernel
+    eprintln!("📦 Installing ipykernel...");
     let status = Command::new("uv")
         .args([
             "pip",
             "install",
             "--python",
             venv_path.to_str().unwrap(),
-            "-r",
-            requirements_file.to_str().unwrap(),
+            "ipykernel",
         ])
         .status();
 

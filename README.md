@@ -112,25 +112,12 @@ nb read notebook.ipynb --cell-index 0     # View specific cell
 nb search notebook.ipynb "import"         # Find patterns
 nb search notebook.ipynb --with-errors    # Find cells with errors
 
-# Execute locally (requires Python dependencies)
+# Execute locally (native Rust implementation)
 nb execute notebook.ipynb --cell-index 0  # Execute specific cell
 nb execute notebook.ipynb                 # Execute all cells
 ```
 
-### Python Dependencies for Local Execution
-
-To execute notebooks in local mode, install:
-
-```bash
-pip install -r requirements.txt
-```
-
-Or manually:
-```bash
-pip install nbclient nbformat
-```
-
-**Note**: These dependencies are **only** required for local execution. Remote mode doesn't need them.
+**Note**: Local execution requires a Jupyter kernel to be installed (e.g., `pip install ipykernel` for Python). The CLI communicates directly with kernels via ZeroMQ using native Rust.
 
 ## Remote Mode
 

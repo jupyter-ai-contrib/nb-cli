@@ -31,10 +31,9 @@ else
     echo "✅ Test venv already exists"
 fi
 
-# Install dependencies using uv pip from requirements.txt
-echo "📦 Installing test dependencies..."
-REQUIREMENTS_FILE="$SCRIPT_DIR/../requirements.txt"
-uv pip install --python "$VENV_PATH" -r "$REQUIREMENTS_FILE"
+# Install ipykernel for Python kernel
+echo "📦 Installing ipykernel..."
+uv pip install --python "$VENV_PATH" ipykernel
 
 echo ""
 echo "✅ Test environment ready!"

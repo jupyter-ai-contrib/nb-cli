@@ -2,55 +2,34 @@ use super::discovery::find_kernel;
 use crate::execution::types::{ExecutionConfig, ExecutionError, ExecutionResult};
 use crate::execution::ExecutionBackend;
 use anyhow::{Context, Result};
-use std::io::Write;
-use std::process::{Command, Stdio};
+use jupyter_protocol::{
+    ConnectionInfo, ExecuteRequest, ExecutionState, JupyterMessage, JupyterMessageContent,
+};
+use std::path::PathBuf;
 
-/// Local execution backend using nbclient
+/// Local execution backend using runtimelib
 ///
-/// This implementation uses a Python script with nbclient to execute code.
-/// nbclient is the official Jupyter library for notebook execution and provides
-/// a high-level API that handles all kernel management automatically.
-///
-/// For multiple cells, this executes each cell immediately but passes all previous
-/// cells as context to preserve kernel state (variables from earlier cells remain available).
+/// This implementation uses runtimelib to communicate directly with Jupyter kernels
+/// over ZeroMQ. It manages the kernel lifecycle and maintains state across cells.
 pub struct LocalExecutor {
     config: ExecutionConfig,
     kernel_name: String,
-    batch_script_path: std::path::PathBuf,
-    // Track executed cells to maintain kernel state
-    executed_cells: Vec<String>,
-    // Working directory for kernel execution (notebook directory)
-    cwd: Option<std::path::PathBuf>,
-}
+    kernel_spec: Option<runtimelib::KernelspecDir>,
 
-// Embed the Python batch script at compile time
-const BATCH_SCRIPT: &str = include_str!("../../../scripts/execute_batch.py");
+    // Kernel process and connections
+    kernel_process: Option<tokio::process::Child>,
+    connection_info: Option<ConnectionInfo>,
+    shell_socket: Option<runtimelib::ClientShellConnection>,
+    iopub_socket: Option<runtimelib::ClientIoPubConnection>,
+    session_id: String,
+
+    // Working directory for kernel execution (notebook directory)
+    cwd: Option<PathBuf>,
+}
 
 impl LocalExecutor {
     /// Create a new local executor
     pub fn new(config: ExecutionConfig) -> Result<Self> {
-        // Determine Python batch script path
-        // First try using the script from the source tree (for development)
-        let dev_batch_script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("scripts")
-            .join("execute_batch.py");
-
-        let batch_script_path = if dev_batch_script.exists() {
-            dev_batch_script
-        } else {
-            // Fall back to writing embedded script to temp directory (for distribution)
-            let temp_dir = std::env::temp_dir();
-            let batch_path = temp_dir.join("nb-cli-execute_batch.py");
-
-            // Write embedded script if it doesn't exist
-            if !batch_path.exists() {
-                std::fs::write(&batch_path, BATCH_SCRIPT)
-                    .context("Failed to write batch script to temp directory")?;
-            }
-
-            batch_path
-        };
-
         // Extract working directory from config if notebook_path is set
         let cwd = config
             .notebook_path
@@ -60,120 +39,145 @@ impl LocalExecutor {
         Ok(Self {
             config,
             kernel_name: String::new(),
-            batch_script_path,
-            executed_cells: Vec::new(),
+            kernel_spec: None,
+            kernel_process: None,
+            connection_info: None,
+            shell_socket: None,
+            iopub_socket: None,
+            session_id: uuid::Uuid::new_v4().to_string(),
             cwd,
         })
     }
-}
 
-/// Execute multiple cells as a batch using the Python script
-fn execute_batch(
-    script_path: &std::path::Path,
-    cells: &[String],
-    kernel_name: &str,
-    timeout: std::time::Duration,
-    cwd: Option<&std::path::Path>,
-) -> Result<Vec<ExecutionResult>> {
-    // Create JSON input with all cell codes
-    let cells_json = serde_json::to_string(cells).context("Failed to serialize cells")?;
+    /// Execute a single code cell and collect results
+    async fn execute_cell(&mut self, code: &str) -> Result<ExecutionResult> {
+        let shell_socket = self
+            .shell_socket
+            .as_mut()
+            .context("Shell socket not initialized")?;
+        let iopub_socket = self
+            .iopub_socket
+            .as_mut()
+            .context("IOPub socket not initialized")?;
 
-    // Execute Python script with JSON input via stdin
-    let mut command = Command::new("python3");
-    command
-        .arg(script_path)
-        .arg("--from-json")
-        .arg("--kernel")
-        .arg(kernel_name)
-        .arg("--timeout")
-        .arg(timeout.as_secs().to_string());
+        // Create execute request
+        let execute_request = ExecuteRequest::new(code.to_string());
+        let execute_request: JupyterMessage = execute_request.into();
+        let request_id = execute_request.header.msg_id.clone();
 
-    // Add working directory if specified
-    if let Some(cwd_path) = cwd {
-        command.arg("--cwd").arg(cwd_path);
-    }
+        // Send execute request
+        shell_socket
+            .send(execute_request)
+            .await
+            .context("Failed to send execute request")?;
 
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("Failed to spawn Python process")?;
-
-    // Write cells JSON to stdin
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(cells_json.as_bytes())
-            .context("Failed to write cells to Python stdin")?;
-    }
-
-    // Wait for completion
-    let output = child
-        .wait_with_output()
-        .context("Failed to wait for Python process")?;
-
-    // Parse JSON output (array of results)
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // Note: allow non-zero exit if we got valid JSON output (cells can have errors)
-    let results_json: Vec<serde_json::Value> =
-        serde_json::from_str(&stdout).with_context(|| {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            format!(
-                "Failed to parse Python output.\nStdout: {}\nStderr: {}",
-                stdout, stderr
-            )
-        })?;
-
-    // Convert JSON results to ExecutionResult
-    let mut results = Vec::new();
-    for result_json in results_json {
-        let success = result_json["success"]
-            .as_bool()
-            .context("Missing 'success' field")?;
-
-        let outputs_json = result_json["outputs"]
-            .as_array()
-            .context("Missing 'outputs' field")?;
-
+        // Collect outputs from IOPub
         let mut outputs = Vec::new();
-        for output_json in outputs_json {
-            outputs.push(serde_json::from_value(output_json.clone())?);
+        let mut execution_count = None;
+        let mut error_info: Option<ExecutionError> = None;
+
+        let timeout = self.config.timeout;
+        let deadline = tokio::time::Instant::now() + timeout;
+
+        loop {
+            // Check timeout
+            if tokio::time::Instant::now() > deadline {
+                anyhow::bail!("Execution timeout after {:?}", timeout);
+            }
+
+            // Read message with timeout
+            let message = match tokio::time::timeout_at(deadline, iopub_socket.read()).await {
+                Ok(Ok(msg)) => msg,
+                Ok(Err(e)) => {
+                    anyhow::bail!("Error reading IOPub message: {}", e);
+                }
+                Err(_) => {
+                    anyhow::bail!("Timeout reading IOPub message");
+                }
+            };
+
+            // Only process messages related to our request
+            let is_our_message = message
+                .parent_header
+                .as_ref()
+                .map(|h| h.msg_id.as_str() == request_id.as_str())
+                .unwrap_or(false);
+
+            if !is_our_message {
+                continue;
+            }
+
+            match message.content {
+                JupyterMessageContent::Status(status) => {
+                    if status.execution_state == ExecutionState::Idle {
+                        // Execution complete
+                        break;
+                    }
+                }
+                JupyterMessageContent::StreamContent(stream) => {
+                    // Convert to nbformat output
+                    let name = match stream.name {
+                        jupyter_protocol::Stdio::Stdout => "stdout".to_string(),
+                        jupyter_protocol::Stdio::Stderr => "stderr".to_string(),
+                    };
+                    let output = nbformat::v4::Output::Stream {
+                        name,
+                        text: nbformat::v4::MultilineString(stream.text),
+                    };
+                    outputs.push(output);
+                }
+                JupyterMessageContent::ExecuteResult(result) => {
+                    execution_count = Some(result.execution_count.value() as i64);
+                    // Convert to nbformat output
+                    let json = serde_json::json!({
+                        "output_type": "execute_result",
+                        "execution_count": result.execution_count.value(),
+                        "data": result.data,
+                        "metadata": result.metadata
+                    });
+                    if let Ok(output) = serde_json::from_value(json) {
+                        outputs.push(output);
+                    }
+                }
+                JupyterMessageContent::DisplayData(display) => {
+                    // Convert to nbformat output
+                    let json = serde_json::json!({
+                        "output_type": "display_data",
+                        "data": display.data,
+                        "metadata": display.metadata
+                    });
+                    if let Ok(output) = serde_json::from_value(json) {
+                        outputs.push(output);
+                    }
+                }
+                JupyterMessageContent::ErrorOutput(error) => {
+                    // Store error info
+                    error_info = Some(ExecutionError {
+                        ename: error.ename.clone(),
+                        evalue: error.evalue.clone(),
+                        traceback: error.traceback.clone(),
+                    });
+                    // Also add as output
+                    let output = nbformat::v4::Output::Error(nbformat::v4::ErrorOutput {
+                        ename: error.ename,
+                        evalue: error.evalue,
+                        traceback: error.traceback,
+                    });
+                    outputs.push(output);
+                }
+                _ => {
+                    // Ignore other message types
+                }
+            }
         }
 
-        let execution_count = result_json["execution_count"].as_i64();
-
-        let error = if let Some(error_json) = result_json.get("error") {
-            if !error_json.is_null() {
-                Some(ExecutionError {
-                    ename: error_json["ename"].as_str().unwrap_or("").to_string(),
-                    evalue: error_json["evalue"].as_str().unwrap_or("").to_string(),
-                    traceback: error_json["traceback"]
-                        .as_array()
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|v| v.as_str().map(String::from))
-                                .collect()
-                        })
-                        .unwrap_or_default(),
-                })
-            } else {
-                None
-            }
+        // Build result
+        if let Some(error) = error_info {
+            Ok(ExecutionResult::error(outputs, execution_count, error))
         } else {
-            None
-        };
-
-        if success {
-            results.push(ExecutionResult::success(outputs, execution_count));
-        } else if let Some(error) = error {
-            results.push(ExecutionResult::error(outputs, execution_count, error));
-        } else {
-            anyhow::bail!("Execution failed but no error information provided");
+            Ok(ExecutionResult::success(outputs, execution_count))
         }
     }
-
-    Ok(results)
 }
 
 #[async_trait::async_trait]
@@ -184,34 +188,105 @@ impl ExecutionBackend for LocalExecutor {
             self.config.kernel_name.as_deref(),
             None, // Notebook kernel will be passed from command
         )?;
+        self.kernel_name = kernel_name.clone();
 
-        self.kernel_name = kernel_name;
+        // Find kernelspec
+        let kernelspecs = runtimelib::list_kernelspecs().await;
+        let kernel_spec = kernelspecs
+            .iter()
+            .find(|k| k.kernel_name == kernel_name)
+            .context(format!("Kernel '{}' not found", kernel_name))?
+            .clone();
 
-        // Check that Python and nbclient are available
-        let check = Command::new("python3")
-            .arg("-c")
-            .arg("import nbclient")
-            .output()
-            .context("Failed to check for nbclient")?;
+        self.kernel_spec = Some(kernel_spec.clone());
 
-        if !check.status.success() {
-            let stderr = String::from_utf8_lossy(&check.stderr);
-            anyhow::bail!(
-                "nbclient not found. Install it with: pip install nbclient\nError: {}",
-                stderr
-            );
+        // Allocate ports for ZeroMQ
+        let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1));
+        let ports = runtimelib::peek_ports(ip, 5)
+            .await
+            .context("Failed to allocate ports")?;
+
+        if ports.len() != 5 {
+            anyhow::bail!("Failed to allocate 5 ports, got {}", ports.len());
         }
 
-        // Also check for nbformat (required by nbclient)
-        let check = Command::new("python3")
-            .arg("-c")
-            .arg("import nbformat")
-            .output()
-            .context("Failed to check for nbformat")?;
+        // Create connection info
+        let connection_info = ConnectionInfo {
+            transport: jupyter_protocol::connection_info::Transport::TCP,
+            ip: ip.to_string(),
+            stdin_port: ports[0],
+            control_port: ports[1],
+            hb_port: ports[2],
+            shell_port: ports[3],
+            iopub_port: ports[4],
+            signature_scheme: "hmac-sha256".to_string(),
+            key: uuid::Uuid::new_v4().to_string(),
+            kernel_name: Some(kernel_name.clone()),
+        };
 
-        if !check.status.success() {
-            anyhow::bail!("nbformat not found. Install it with: pip install nbformat");
+        // Write connection file
+        let runtime_dir = runtimelib::dirs::runtime_dir();
+        tokio::fs::create_dir_all(&runtime_dir)
+            .await
+            .context("Failed to create runtime directory")?;
+
+        let connection_path = runtime_dir.join(format!("kernel-nb-cli-{}.json", self.session_id));
+        let content = serde_json::to_string(&connection_info)
+            .context("Failed to serialize connection info")?;
+        tokio::fs::write(&connection_path, content)
+            .await
+            .context("Failed to write connection file")?;
+
+        // Determine working directory
+        let working_dir = self
+            .cwd
+            .as_ref()
+            .map(|p| p.as_path())
+            .unwrap_or_else(|| std::path::Path::new("."));
+
+        // Launch kernel process
+        let mut process = kernel_spec
+            .command(&connection_path, None, None)
+            .context("Failed to create kernel command")?
+            .current_dir(working_dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .context("Failed to spawn kernel process")?;
+
+        // Wait a bit for kernel to start
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+        // Check if kernel is still running
+        if let Ok(Some(status)) = process.try_wait() {
+            anyhow::bail!("Kernel process exited immediately with status: {}", status);
         }
+
+        self.kernel_process = Some(process);
+        self.connection_info = Some(connection_info.clone());
+
+        // Create ZeroMQ connections
+        let iopub_socket = runtimelib::create_client_iopub_connection(
+            &connection_info,
+            "",
+            &self.session_id,
+        )
+        .await
+        .context("Failed to create IOPub socket")?;
+
+        let identity = runtimelib::peer_identity_for_session(&self.session_id)
+            .context("Failed to create peer identity")?;
+        let shell_socket = runtimelib::create_client_shell_connection_with_identity(
+            &connection_info,
+            &self.session_id,
+            identity,
+        )
+        .await
+        .context("Failed to create shell socket")?;
+
+        self.iopub_socket = Some(iopub_socket);
+        self.shell_socket = Some(shell_socket);
 
         Ok(())
     }
@@ -221,41 +296,27 @@ impl ExecutionBackend for LocalExecutor {
         code: &str,
         _cell_id: Option<&str>,
     ) -> Result<ExecutionResult> {
-        // Add this cell to the list
-        self.executed_cells.push(code.to_string());
-
-        // Execute all cells accumulated so far as a batch
-        // This preserves kernel state across cells
-        let cells = self.executed_cells.clone();
-        let batch_script_path = self.batch_script_path.clone();
-        let kernel_name = self.kernel_name.clone();
-        let timeout = self.config.timeout;
-        let cwd = self.cwd.clone();
-
-        // Execute in a blocking task
-        let results = tokio::task::spawn_blocking(move || {
-            execute_batch(
-                &batch_script_path,
-                &cells,
-                &kernel_name,
-                timeout,
-                cwd.as_deref(),
-            )
-        })
-        .await
-        .context("Task join error")??;
-
-        // Return only the result for the current (last) cell
-        let current_cell_index = self.executed_cells.len() - 1;
-        results
-            .get(current_cell_index)
-            .cloned()
-            .context("Missing result for current cell")
+        self.execute_cell(code).await
     }
 
     async fn stop(&mut self) -> Result<()> {
-        // Clear executed cells for next session
-        self.executed_cells.clear();
+        // Close sockets
+        self.shell_socket = None;
+        self.iopub_socket = None;
+
+        // Terminate kernel process
+        if let Some(mut process) = self.kernel_process.take() {
+            let _ = process.kill();
+            let _ = process.wait();
+        }
+
+        // Clean up connection file
+        if self.connection_info.is_some() {
+            let runtime_dir = runtimelib::dirs::runtime_dir();
+            let connection_path = runtime_dir.join(format!("kernel-nb-cli-{}.json", self.session_id));
+            let _ = tokio::fs::remove_file(&connection_path).await;
+        }
+
         Ok(())
     }
 }

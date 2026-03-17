@@ -178,9 +178,16 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     // Execute cells in range and collect results
     let mut executed_count = 0;
     let mut failed_count = 0;
-    let total_cells = notebook.cells.len();
+    let _total_cells = notebook.cells.len();
     let mut execution_results: HashMap<usize, crate::execution::types::ExecutionResult> =
         HashMap::new();
+
+    // Count total code cells in range for progress reporting
+    let total_code_cells = notebook.cells[start_idx..=end_idx]
+        .iter()
+        .filter(|cell| matches!(cell, Cell::Code { .. }))
+        .count();
+    let mut code_cell_num = 0;
 
     for (i, cell) in notebook.cells.iter().enumerate() {
         // Skip cells outside range
@@ -193,13 +200,15 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
             continue;
         }
 
+        code_cell_num += 1;
+
         // Get cell source and cell_id
         let source = crate::commands::common::cell_to_string(cell);
         let cell_id = crate::commands::common::cell_id_to_string(cell);
 
         // Print progress (only in text mode)
         if matches!(args.format, OutputFormat::Text) {
-            eprintln!("Executing cell {} of {}...", i + 1, total_cells);
+            eprintln!("Executing cell {} of {}...", code_cell_num, total_code_cells);
         }
 
         // Execute cell
@@ -215,7 +224,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
                     failed_count += 1;
 
                     if matches!(args.format, OutputFormat::Text) {
-                        eprintln!("  ✗ Cell {} failed", i);
+                        eprintln!("  ✗ Cell {} completed with error", code_cell_num);
                         if let Some(error) =
                             execution_results.get(&i).and_then(|r| r.error.as_ref())
                         {
@@ -229,7 +238,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
                         anyhow::bail!("Execution stopped at cell {} due to error", i);
                     }
                 } else if matches!(args.format, OutputFormat::Text) {
-                    eprintln!("  ✓ Cell {} completed", i);
+                    eprintln!("  ✓ Cell {} completed", code_cell_num);
                 }
             }
             Err(e) => {

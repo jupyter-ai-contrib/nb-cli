@@ -34,7 +34,7 @@ For execution tests, you need to setup the Python environment:
 
 # Option 2: Manual setup
 uv venv tests/.test-venv
-tests/.test-venv/bin/pip install nbclient nbformat ipykernel
+tests/.test-venv/bin/pip install ipykernel
 ```
 
 **Note**: If you don't have `uv` installed:
@@ -80,7 +80,7 @@ cargo test --test integration_execution -- --nocapture
 Execution tests will automatically:
 - ✅ **Skip gracefully** if Python environment is not set up
 - ✅ **Auto-create venv** with `uv` if available
-- ✅ **Install dependencies** (nbclient, nbformat, ipykernel)
+- ✅ **Install dependencies** (ipykernel for Python kernel)
 - ✅ **Use isolated environment** (tests/.test-venv)
 
 If execution tests are skipped, you'll see:
