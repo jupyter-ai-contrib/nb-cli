@@ -7,7 +7,7 @@ A fast, programmatic command-line interface for working with Jupyter notebooks. 
 
 ## Installation
 
-### Quick Install (macOS Apple Silicon only)
+### Quick Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jupyter-ai-contrib/nb-cli/main/install.sh | bash
@@ -15,18 +15,7 @@ curl -fsSL https://raw.githubusercontent.com/jupyter-ai-contrib/nb-cli/main/inst
 
 This installs the binary to `~/.nb-cli/bin/nb`. Follow the instructions to add it to your PATH.
 
-**Note**: Pre-built binaries are currently only available for macOS Apple Silicon (M1/M2/M3/M4). For other platforms, please use `cargo install` or build from source.
-
-### Manual Binary Download
-
-**macOS (Apple Silicon - M1/M2/M3/M4)**:
-```bash
-curl -L https://github.com/jupyter-ai-contrib/nb-cli/releases/download/v0.0.1/nb-macos-arm64 -o nb
-chmod +x nb
-sudo mv nb /usr/local/bin/
-```
-
-**Other platforms**: Use `cargo install nb-cli` or build from source (see below).
+**Note**: If you get an error while installation, where your platform is not supported, please use `cargo install` or build from source.
 
 ### Install from crates.io
 
