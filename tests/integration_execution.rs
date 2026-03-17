@@ -411,8 +411,7 @@ fn test_execute_json_format() {
             nb_path.to_str().unwrap(),
             "--cell-index",
             "0",
-            "--format",
-            "json",
+            "--json",
         ])
         .assert_success();
 

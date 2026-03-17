@@ -101,7 +101,7 @@ fn test_create_empty_notebook() {
     let nb_path = env.notebook_path("test.ipynb");
 
     let result = env
-        .run(&["create", nb_path.to_str().unwrap()])
+        .run(&["create", nb_path.to_str().unwrap(), "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -121,8 +121,7 @@ fn test_create_basic_notebook() {
             "create",
             nb_path.to_str().unwrap(),
             "--template",
-            "basic",
-        ])
+            "basic", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -141,8 +140,7 @@ fn test_create_markdown_notebook() {
             "create",
             nb_path.to_str().unwrap(),
             "--template",
-            "markdown",
-        ])
+            "markdown", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -162,8 +160,7 @@ fn test_create_with_custom_kernel() {
             "--kernel",
             "python3.11",
             "--language",
-            "python",
-        ])
+            "python", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -201,7 +198,7 @@ fn test_create_with_force_overwrites() {
 
     // Creating again with --force should succeed
     let result = env
-        .run(&["create", nb_path.to_str().unwrap(), "--force"])
+        .run(&["create", nb_path.to_str().unwrap(), "--force", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -214,12 +211,7 @@ fn test_create_text_format() {
     let nb_path = env.notebook_path("test.ipynb");
 
     let result = env
-        .run(&[
-            "create",
-            nb_path.to_str().unwrap(),
-            "-f",
-            "text",
-        ])
+        .run(&["create", nb_path.to_str().unwrap()])
         .assert_success();
 
     assert!(result.stdout.contains("Created notebook:"));
@@ -235,7 +227,7 @@ fn test_read_empty_notebook() {
     let nb_path = env.copy_fixture("empty.ipynb", "test.ipynb");
 
     let result = env
-        .run(&["read", nb_path.to_str().unwrap()])
+        .run(&["read", nb_path.to_str().unwrap(), "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -249,7 +241,7 @@ fn test_read_notebook_with_cells() {
     let nb_path = env.copy_fixture("with_code.ipynb", "test.ipynb");
 
     let result = env
-        .run(&["read", nb_path.to_str().unwrap()])
+        .run(&["read", nb_path.to_str().unwrap(), "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -262,7 +254,7 @@ fn test_read_specific_cell_by_index() {
     let nb_path = env.copy_fixture("with_code.ipynb", "test.ipynb");
 
     let result = env
-        .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "1"])
+        .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "1", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -280,7 +272,7 @@ fn test_read_last_cell_negative_index() {
     let nb_path = env.copy_fixture("with_code.ipynb", "test.ipynb");
 
     let result = env
-        .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "-1"])
+        .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "-1", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -301,8 +293,7 @@ fn test_read_cell_by_id() {
             "read",
             nb_path.to_str().unwrap(),
             "--cell",
-            "cell-1",
-        ])
+            "cell-1", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -318,8 +309,7 @@ fn test_read_with_outputs() {
         .run(&[
             "read",
             nb_path.to_str().unwrap(),
-            "--with-outputs",
-        ])
+            "--with-outputs", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -333,7 +323,7 @@ fn test_read_only_code() {
     let nb_path = env.copy_fixture("mixed_cells.ipynb", "test.ipynb");
 
     let result = env
-        .run(&["read", nb_path.to_str().unwrap(), "--only-code"])
+        .run(&["read", nb_path.to_str().unwrap(), "--only-code", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -353,8 +343,7 @@ fn test_read_only_markdown() {
         .run(&[
             "read",
             nb_path.to_str().unwrap(),
-            "--only-markdown",
-        ])
+            "--only-markdown", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -371,7 +360,7 @@ fn test_read_text_format() {
     let nb_path = env.copy_fixture("with_code.ipynb", "test.ipynb");
 
     let result = env
-        .run(&["read", nb_path.to_str().unwrap(), "-f", "text"])
+        .run(&["read", nb_path.to_str().unwrap()])
         .assert_success();
 
     assert!(result.stdout.contains("Cell"));
@@ -400,8 +389,7 @@ fn test_add_code_cell() {
             "add",
             nb_path.to_str().unwrap(),
             "--source",
-            "x = 1 + 1",
-        ])
+            "x = 1 + 1", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -423,8 +411,7 @@ fn test_add_markdown_cell() {
             "--type",
             "markdown",
             "--source",
-            "# Hello World",
-        ])
+            "# Hello World", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -444,8 +431,7 @@ fn test_add_raw_cell() {
             "--type",
             "raw",
             "--source",
-            "Raw content",
-        ])
+            "Raw content", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -462,13 +448,12 @@ fn test_add_cell_with_multiline_source() {
         "add",
         nb_path.to_str().unwrap(),
         "--source",
-        "def hello():\n    print('world')\n\nhello()",
-    ])
+        "def hello():\n    print('world')\n\nhello()", "--json"])
     .assert_success();
 
     // Verify the cell was added correctly
     let result = env
-        .run(&["read", nb_path.to_str().unwrap()])
+        .run(&["read", nb_path.to_str().unwrap(), "--json"])
         .assert_success();
     let json = result.json_value();
     let cells = json["cells"].as_array().unwrap();
@@ -488,8 +473,7 @@ fn test_add_cell_at_beginning() {
             "--source",
             "inserted at start",
             "--insert-at",
-            "0",
-        ])
+            "0", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -508,8 +492,7 @@ fn test_add_cell_at_end() {
             "add",
             nb_path.to_str().unwrap(),
             "--source",
-            "appended",
-        ])
+            "appended", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -529,8 +512,7 @@ fn test_add_cell_with_negative_index() {
             "--source",
             "before last",
             "--insert-at",
-            "-1",
-        ])
+            "-1", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -550,8 +532,7 @@ fn test_add_cell_after_cell_id() {
             "--source",
             "after cell-1",
             "--after",
-            "cell-1",
-        ])
+            "cell-1", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -571,8 +552,7 @@ fn test_add_cell_before_cell_id() {
             "--source",
             "before cell-2",
             "--before",
-            "cell-2",
-        ])
+            "cell-2", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -592,8 +572,7 @@ fn test_add_cell_with_custom_id() {
             "--source",
             "test",
             "--id",
-            "my-custom-id",
-        ])
+            "my-custom-id", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -613,8 +592,7 @@ fn test_add_cell_duplicate_id_fails() {
         "--source",
         "duplicate",
         "--id",
-        "cell-1",
-    ])
+        "cell-1"])
     .assert_failure();
 }
 
@@ -624,7 +602,7 @@ fn test_add_cell_empty_source() {
     let nb_path = env.copy_fixture("empty.ipynb", "test.ipynb");
 
     let result = env
-        .run(&["cell", "add", nb_path.to_str().unwrap()])
+        .run(&["cell", "add", nb_path.to_str().unwrap(), "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -645,13 +623,12 @@ fn test_update_cell_source() {
         "--cell-index",
             "0",
         "--source",
-        "y = 2 + 2",
-    ])
+        "y = 2 + 2", "--json"])
     .assert_success();
 
     // Verify the update
     let result = env
-        .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "0"])
+        .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "0", "--json"])
         .assert_success();
     let json = result.json_value();
     let source = join_source(&json["source"]);
@@ -670,12 +647,11 @@ fn test_update_cell_append() {
         "--cell-index",
             "0",
         "--append",
-        "\nprint('appended')",
-    ])
+        "\nprint('appended')", "--json"])
     .assert_success();
 
     let result = env
-        .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "0"])
+        .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "0", "--json"])
         .assert_success();
     let json = result.json_value();
     let source = join_source(&json["source"]);
@@ -695,8 +671,7 @@ fn test_update_cell_by_id() {
         "--cell",
         "cell-1",
         "--source",
-        "updated via id",
-    ])
+        "updated via id"])
     .assert_success();
 
     let result = env
@@ -704,8 +679,7 @@ fn test_update_cell_by_id() {
             "read",
             nb_path.to_str().unwrap(),
             "--cell",
-            "cell-1",
-        ])
+            "cell-1", "--json"])
         .assert_success();
     let json = result.json_value();
     let source = join_source(&json["source"]);
@@ -724,12 +698,11 @@ fn test_update_cell_type() {
         "--cell-index",
             "0",
         "--type",
-        "markdown",
-    ])
+        "markdown", "--json"])
     .assert_success();
 
     let result = env
-        .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "0"])
+        .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "0", "--json"])
         .assert_success();
     let json = result.json_value();
     assert_eq!(json["cell_type"], "markdown");
@@ -747,12 +720,11 @@ fn test_update_cell_negative_index() {
         "--cell-index",
         "-1",
         "--source",
-        "updated last cell",
-    ])
+        "updated last cell", "--json"])
     .assert_success();
 
     let result = env
-        .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "-1"])
+        .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "-1", "--json"])
         .assert_success();
     let json = result.json_value();
     let source = join_source(&json["source"]);
@@ -767,7 +739,7 @@ fn test_delete_cell_by_index() {
     let nb_path = env.copy_fixture("with_code.ipynb", "test.ipynb");
 
     let result = env
-        .run(&["cell", "delete", nb_path.to_str().unwrap(), "--cell-index", "0"])
+        .run(&["cell", "delete", nb_path.to_str().unwrap(), "--cell-index", "0", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -786,8 +758,7 @@ fn test_delete_cell_by_id() {
             "delete",
             nb_path.to_str().unwrap(),
             "--cell",
-            "cell-1",
-        ])
+            "cell-1", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -808,8 +779,7 @@ fn test_delete_multiple_cells() {
             "--cell-index",
             "0",
             "--cell-index",
-            "2",
-        ])
+            "2", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -823,7 +793,7 @@ fn test_delete_with_negative_index() {
     let nb_path = env.copy_fixture("with_code.ipynb", "test.ipynb");
 
     let result = env
-        .run(&["cell", "delete", nb_path.to_str().unwrap(), "--cell-index", "-1"])
+        .run(&["cell", "delete", nb_path.to_str().unwrap(), "--cell-index", "-1", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -843,8 +813,7 @@ fn test_delete_all_cells_fails() {
         "--cell-index",
             "0",
         "--cell-index",
-            "1",
-    ])
+            "1"])
     .assert_failure();
 }
 
@@ -856,7 +825,7 @@ fn test_search_finds_pattern() {
     let nb_path = env.copy_fixture("mixed_cells.ipynb", "test.ipynb");
 
     let result = env
-        .run(&["search", nb_path.to_str().unwrap(), "import"])
+        .run(&["search", nb_path.to_str().unwrap(), "import", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -874,8 +843,7 @@ fn test_search_case_insensitive() {
             "search",
             nb_path.to_str().unwrap(),
             "PANDAS",
-            "-i",
-        ])
+            "-i", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -891,8 +859,7 @@ fn test_search_no_matches() {
         .run(&[
             "search",
             nb_path.to_str().unwrap(),
-            "nonexistent_pattern",
-        ])
+            "nonexistent_pattern", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -907,7 +874,7 @@ fn test_search_multiple_matches() {
 
     // Search for "import" which appears twice in code-1 cell
     let result = env
-        .run(&["search", nb_path.to_str().unwrap(), "import"])
+        .run(&["search", nb_path.to_str().unwrap(), "import", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -923,7 +890,7 @@ fn test_clear_outputs() {
     let nb_path = env.copy_fixture("with_outputs.ipynb", "test.ipynb");
 
     let result = env
-        .run(&["output", "clear", nb_path.to_str().unwrap()])
+        .run(&["output", "clear", nb_path.to_str().unwrap(), "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -934,8 +901,7 @@ fn test_clear_outputs() {
         .run(&[
             "read",
             nb_path.to_str().unwrap(),
-            "--with-outputs",
-        ])
+            "--with-outputs", "--json"])
         .assert_success();
     let read_json = read_result.json_value();
     let cells = read_json["cells"].as_array().unwrap();
@@ -952,7 +918,7 @@ fn test_clear_outputs_empty_notebook() {
     let nb_path = env.copy_fixture("empty.ipynb", "test.ipynb");
 
     let result = env
-        .run(&["output", "clear", nb_path.to_str().unwrap()])
+        .run(&["output", "clear", nb_path.to_str().unwrap(), "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -965,7 +931,7 @@ fn test_clear_outputs_specific_cell() {
     let nb_path = env.copy_fixture("with_outputs.ipynb", "test.ipynb");
 
     let result = env
-        .run(&["output", "clear", nb_path.to_str().unwrap(), "--cell-index", "0"])
+        .run(&["output", "clear", nb_path.to_str().unwrap(), "--cell-index", "0", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -978,7 +944,7 @@ fn test_clear_outputs_negative_index() {
     let nb_path = env.copy_fixture("with_outputs.ipynb", "test.ipynb");
 
     let result = env
-        .run(&["output", "clear", nb_path.to_str().unwrap(), "--cell-index", "-1"])
+        .run(&["output", "clear", nb_path.to_str().unwrap(), "--cell-index", "-1", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -1004,8 +970,7 @@ fn test_workflow_create_add_read() {
         "--type",
         "markdown",
         "--source",
-        "# Workflow Test",
-    ])
+        "# Workflow Test"])
     .assert_success();
 
     env.run(&[
@@ -1013,13 +978,12 @@ fn test_workflow_create_add_read() {
         "add",
         nb_path.to_str().unwrap(),
         "--source",
-        "x = 42",
-    ])
+        "x = 42", "--json"])
     .assert_success();
 
     // Read
     let result = env
-        .run(&["read", nb_path.to_str().unwrap()])
+        .run(&["read", nb_path.to_str().unwrap(), "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -1039,8 +1003,7 @@ fn test_workflow_modify_and_verify() {
         "--cell-index",
             "0",
         "--source",
-        "modified = True",
-    ])
+        "modified = True"])
     .assert_success();
 
     // Delete second cell
@@ -1053,13 +1016,12 @@ fn test_workflow_modify_and_verify() {
         "add",
         nb_path.to_str().unwrap(),
         "--source",
-        "new_cell = 123",
-    ])
+        "new_cell = 123", "--json"])
     .assert_success();
 
     // Verify
     let result = env
-        .run(&["read", nb_path.to_str().unwrap()])
+        .run(&["read", nb_path.to_str().unwrap(), "--json"])
         .assert_success();
     let json = result.json_value();
     assert_eq!(json["cells"].as_array().unwrap().len(), 2);

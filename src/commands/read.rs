@@ -1,26 +1,19 @@
-use crate::commands::common;
+use crate::commands::common::{self, OutputFormat};
 use crate::notebook;
 use anyhow::{Context, Result};
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use jupyter_protocol::media::Media;
 use nbformat::v4::{Cell, Output};
 use serde_json::json;
-
-#[derive(Clone, ValueEnum)]
-#[value(rename_all = "lowercase")]
-pub enum OutputFormat {
-    Json,
-    Text,
-}
 
 #[derive(Parser)]
 pub struct ReadArgs {
     /// Path to notebook file
     pub file: String,
 
-    /// Output format
-    #[arg(short, long, default_value = "json", value_name = "FORMAT")]
-    pub format: OutputFormat,
+    /// Output in JSON format instead of text
+    #[arg(long)]
+    pub json: bool,
 
     /// Get specific cell by ID (stable identifier)
     #[arg(short, long, value_name = "ID", conflicts_with_all = ["cell_index", "only_code", "only_markdown"])]
@@ -45,11 +38,16 @@ pub struct ReadArgs {
 
 pub fn execute(args: ReadArgs) -> Result<()> {
     let notebook = notebook::read_notebook(&args.file)?;
+    let format = if args.json {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Text
+    };
 
     // Handle specific cell by ID
     if let Some(ref cell_id) = args.cell {
         let (index, cell) = common::find_cell_by_id(&notebook.cells, cell_id)?;
-        output_cell_with_optional_output(cell, index, &args.format, args.with_outputs)?;
+        output_cell_with_optional_output(cell, index, &format, args.with_outputs)?;
         return Ok(());
     }
 
@@ -62,24 +60,24 @@ pub fn execute(args: ReadArgs) -> Result<()> {
             notebook.cells.len()
         ))?;
 
-        output_cell_with_optional_output(&cell, index, &args.format, args.with_outputs)?;
+        output_cell_with_optional_output(&cell, index, &format, args.with_outputs)?;
         return Ok(());
     }
 
     // Handle --only-code flag
     if args.only_code {
-        output_code_cells(&notebook.cells, &args.format, args.with_outputs)?;
+        output_code_cells(&notebook.cells, &format, args.with_outputs)?;
         return Ok(());
     }
 
     // Handle --only-markdown flag
     if args.only_markdown {
-        output_markdown_cells(&notebook.cells, &args.format)?;
+        output_markdown_cells(&notebook.cells, &format)?;
         return Ok(());
     }
 
     // Default: show notebook structure
-    output_notebook_structure(&notebook, &args.format, args.with_outputs)?;
+    output_notebook_structure(&notebook, &format, args.with_outputs)?;
     Ok(())
 }
 
