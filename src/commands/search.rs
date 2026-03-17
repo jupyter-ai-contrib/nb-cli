@@ -1,4 +1,4 @@
-use crate::commands::common;
+use crate::commands::common::{self, OutputFormat};
 use crate::notebook;
 use anyhow::{bail, Result};
 use clap::{Parser, ValueEnum};
@@ -26,13 +26,6 @@ pub enum CellTypeFilter {
     Markdown,
     Raw,
     All,
-}
-
-#[derive(Clone, ValueEnum)]
-#[value(rename_all = "lowercase")]
-pub enum OutputFormat {
-    Json,
-    Text,
 }
 
 #[derive(Parser)]
@@ -63,9 +56,9 @@ pub struct SearchArgs {
     #[arg(long)]
     pub with_errors: bool,
 
-    /// Output format
-    #[arg(short = 'f', long, default_value = "json")]
-    pub format: OutputFormat,
+    /// Output in JSON format instead of text
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug)]
@@ -161,7 +154,12 @@ pub fn execute(args: SearchArgs) -> Result<()> {
     }
 
     // Format and print results
-    match args.format {
+    let format = if args.json {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Text
+    };
+    match format {
         OutputFormat::Json => print_json(&results, &args)?,
         OutputFormat::Text => print_text(&results, &args)?,
     }
@@ -235,7 +233,12 @@ fn execute_with_errors(args: &SearchArgs) -> Result<()> {
     }
 
     // Format and print results
-    match args.format {
+    let format = if args.json {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Text
+    };
+    match format {
         OutputFormat::Json => print_json(&results, args)?,
         OutputFormat::Text => print_text(&results, args)?,
     }
@@ -331,7 +334,12 @@ fn extract_string_from_json(value: &serde_json::Value) -> String {
 fn print_empty_results(args: &SearchArgs) -> Result<()> {
     let pattern_display = args.pattern.as_deref().unwrap_or("(no pattern)");
 
-    match args.format {
+    let format = if args.json {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Text
+    };
+    match format {
         OutputFormat::Json => {
             if args.list_only {
                 let output = json!({

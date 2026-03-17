@@ -1,6 +1,6 @@
 # nb - Notebook CLI
 
-A fast, programmatic command-line interface for working with Jupyter notebooks. Designed for AI agents, automation scripts, and developers who need reliable notebook manipulation without opening a browser.
+A fast, command-line interface for working with Jupyter notebooks. Designed for both humans and AI agents, with human-readable text output by default and JSON output available for programmatic use. Enables reliable notebook manipulation without opening a browser.
 
 [![BSD-3-Clause License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org)
@@ -202,11 +202,15 @@ Two ways to reference cells:
 ### Output Format
 
 Control output format for better integration with your workflow:
-- **JSON** (default): Structured, nbformat-compliant for programmatic use
-- **Text** (`-f text`): Human-readable for terminal viewing
+- **Text** (default): Human-readable for terminal viewing and debugging
+- **JSON** (`--json`): Structured, nbformat-compliant for programmatic use and AI agents
 
 ```bash
-nb read notebook.ipynb -f text
+# Default text output
+nb read notebook.ipynb
+
+# JSON output for programmatic use
+nb read notebook.ipynb --json
 ```
 
 ### Multi-line Code

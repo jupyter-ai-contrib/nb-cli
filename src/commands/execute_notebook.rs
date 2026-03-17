@@ -49,9 +49,9 @@ pub struct ExecuteNotebookArgs {
     #[arg(long)]
     pub token: Option<String>,
 
-    /// Output format: json or text
-    #[arg(long, default_value = "text")]
-    pub format: OutputFormat,
+    /// Output in JSON format instead of text
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -90,6 +90,12 @@ pub fn execute(args: ExecuteNotebookArgs) -> Result<()> {
 }
 
 async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
+    let format = if args.json {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Text
+    };
+
     // Read notebook
     let mut notebook = read_notebook(&args.file).context("Failed to read notebook")?;
 
@@ -207,8 +213,11 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         let cell_id = crate::commands::common::cell_id_to_string(cell);
 
         // Print progress (only in text mode)
-        if matches!(args.format, OutputFormat::Text) {
-            eprintln!("Executing cell {} of {}...", code_cell_num, total_code_cells);
+        if matches!(format, OutputFormat::Text) {
+            eprintln!(
+                "Executing cell {} of {}...",
+                code_cell_num, total_code_cells
+            );
         }
 
         // Execute cell
@@ -223,7 +232,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
                 if !success {
                     failed_count += 1;
 
-                    if matches!(args.format, OutputFormat::Text) {
+                    if matches!(format, OutputFormat::Text) {
                         eprintln!("  ✗ Cell {} completed with error", code_cell_num);
                         if let Some(error) =
                             execution_results.get(&i).and_then(|r| r.error.as_ref())
@@ -237,7 +246,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
                         backend.stop().await?;
                         anyhow::bail!("Execution stopped at cell {} due to error", i);
                     }
-                } else if matches!(args.format, OutputFormat::Text) {
+                } else if matches!(format, OutputFormat::Text) {
                     eprintln!("  ✓ Cell {} completed", code_cell_num);
                 }
             }
@@ -332,7 +341,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         failed_cells: failed_count,
     };
 
-    match args.format {
+    match format {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&output_result)?);
         }

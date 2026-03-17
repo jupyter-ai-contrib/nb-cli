@@ -1,16 +1,9 @@
-use crate::commands::common;
+use crate::commands::common::{self, OutputFormat};
 use crate::notebook;
 use anyhow::{bail, Context, Result};
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use nbformat::v4::Cell;
 use serde::Serialize;
-
-#[derive(Clone, ValueEnum)]
-#[value(rename_all = "lowercase")]
-pub enum OutputFormat {
-    Json,
-    Text,
-}
 
 #[derive(Parser)]
 pub struct ClearOutputsArgs {
@@ -33,14 +26,9 @@ pub struct ClearOutputsArgs {
     #[arg(long = "keep-execution-count")]
     pub keep_execution_count: bool,
 
-    /// Output format
-    #[arg(
-        short = 'f',
-        long = "format",
-        default_value = "json",
-        value_name = "FORMAT"
-    )]
-    pub format: OutputFormat,
+    /// Output in JSON format instead of text
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Serialize)]
@@ -86,7 +74,12 @@ pub fn execute(args: ClearOutputsArgs) -> Result<()> {
         execution_counts_cleared: !args.keep_execution_count,
     };
 
-    output_result(&result, &args.format)?;
+    let format = if args.json {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Text
+    };
+    output_result(&result, &format)?;
 
     Ok(())
 }

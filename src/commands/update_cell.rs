@@ -59,14 +59,9 @@ pub struct UpdateCellArgs {
     #[arg(long)]
     pub token: Option<String>,
 
-    /// Output format
-    #[arg(
-        short = 'f',
-        long = "format",
-        default_value = "json",
-        value_name = "FORMAT"
-    )]
-    pub format: OutputFormat,
+    /// Output in JSON format instead of text
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Serialize)]
@@ -193,7 +188,12 @@ async fn execute_with_realtime(
         updated: updates,
     };
 
-    output_result(&result, &args.format)?;
+    let format = if args.json {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Text
+    };
+    output_result(&result, &format)?;
 
     Ok(())
 }
@@ -331,7 +331,12 @@ fn execute_file_based(args: UpdateCellArgs) -> Result<()> {
         updated: updates,
     };
 
-    output_result(&result, &args.format)?;
+    let format = if args.json {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Text
+    };
+    output_result(&result, &format)?;
 
     Ok(())
 }

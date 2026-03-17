@@ -1,16 +1,9 @@
-use crate::commands::common;
+use crate::commands::common::{self, OutputFormat};
 use crate::notebook;
 use anyhow::{bail, Context, Result};
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use serde::Serialize;
 use std::collections::HashSet;
-
-#[derive(Clone, ValueEnum)]
-#[value(rename_all = "lowercase")]
-pub enum OutputFormat {
-    Json,
-    Text,
-}
 
 #[derive(Parser)]
 pub struct DeleteCellArgs {
@@ -29,14 +22,9 @@ pub struct DeleteCellArgs {
     #[arg(short = 'r', long = "range", value_name = "START:END", conflicts_with_all = ["cell", "cell_index"])]
     pub range: Option<String>,
 
-    /// Output format
-    #[arg(
-        short = 'f',
-        long = "format",
-        default_value = "json",
-        value_name = "FORMAT"
-    )]
-    pub format: OutputFormat,
+    /// Output in JSON format instead of text
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Serialize)]
@@ -101,7 +89,12 @@ pub fn execute(args: DeleteCellArgs) -> Result<()> {
         remaining_cells: notebook.cells.len(),
     };
 
-    output_result(&result, &args.format)?;
+    let format = if args.json {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Text
+    };
+    output_result(&result, &format)?;
 
     Ok(())
 }
