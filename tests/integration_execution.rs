@@ -181,12 +181,7 @@ fn test_execute_cell_by_id() {
 
     // Execute cell-1 which doesn't depend on other cells
     let result = env
-        .run(&[
-            "execute",
-            nb_path.to_str().unwrap(),
-            "--cell",
-            "cell-1",
-        ])
+        .run(&["execute", nb_path.to_str().unwrap(), "--cell", "cell-1"])
         .assert_success();
 
     assert!(result.contains("executed") || result.contains("success"));
@@ -290,11 +285,7 @@ fn test_execute_with_allow_errors() {
     let nb_path = env.copy_fixture("with_error.ipynb", "test.ipynb");
 
     // Execute with --allow-errors (still exits with error code but updates notebook)
-    let result = env.run(&[
-        "execute",
-        nb_path.to_str().unwrap(),
-        "--allow-errors",
-    ]);
+    let result = env.run(&["execute", nb_path.to_str().unwrap(), "--allow-errors"]);
 
     // Command fails but should show it executed cells
     assert!(result.contains("Executed") || result.contains("completed"));
@@ -317,10 +308,11 @@ fn test_execute_with_timeout() {
     let nb_path = env.copy_fixture("for_execution.ipynb", "test.ipynb");
 
     // Execute with custom timeout
-    env.run(&["execute",
+    env.run(&[
+        "execute",
         nb_path.to_str().unwrap(),
         "--cell-index",
-            "0",
+        "0",
         "--timeout",
         "60",
     ])
@@ -380,10 +372,11 @@ fn test_execute_dry_run() {
     let nb_path = env.copy_fixture("for_execution.ipynb", "test.ipynb");
 
     // Execute with --dry-run
-    env.run(&["execute",
+    env.run(&[
+        "execute",
         nb_path.to_str().unwrap(),
         "--cell-index",
-            "0",
+        "0",
         "--dry-run",
     ])
     .assert_success();
@@ -407,12 +400,12 @@ fn test_execute_json_format() {
     let nb_path = env.copy_fixture("for_execution.ipynb", "test.ipynb");
 
     let result = env
-        .run(&["execute",
+        .run(&[
+            "execute",
             nb_path.to_str().unwrap(),
             "--cell-index",
             "0",
-            "--format",
-            "json",
+            "--json",
         ])
         .assert_success();
 
@@ -492,7 +485,7 @@ fn test_workflow_modify_and_reexecute() {
         "update",
         nb_path.to_str().unwrap(),
         "--cell-index",
-            "0",
+        "0",
         "--source",
         "x = 100",
     ])

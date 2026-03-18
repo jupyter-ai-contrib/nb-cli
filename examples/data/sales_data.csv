@@ -1,16 +1,48 @@
-order_id,customer_name,product,quantity,unit_price,total_amount,order_date,region
-1001,Alice Johnson,Laptop,1,1200.00,1200.00,2026-01-15,North
-1002,Bob Smith,Mouse,2,25.00,50.00,2026-01-16,South
-1003,Carol White,Keyboard,1,75.00,75.00,2026-01-17,East
-1004,David Brown,Monitor,2,350.00,700.00,2026-01-18,West
-1005,Eve Davis,Laptop,1,1200.00,1200.00,2026-01-20,North
-1006,Frank Miller,USB Cable,5,10.00,50.00,2026-01-22,South
-1007,Grace Lee,Webcam,1,120.00,120.00,2026-01-23,East
-1008,Henry Wilson,Headphones,3,80.00,240.00,2026-01-25,West
-1009,Iris Martinez,Mouse,4,25.00,100.00,2026-01-28,North
-1010,Jack Taylor,Keyboard,2,75.00,150.00,2026-02-01,South
-1011,Karen Anderson,Monitor,1,350.00,350.00,2026-02-03,East
-1012,Leo Thomas,Laptop,2,1200.00,2400.00,2026-02-05,West
-1013,Mia Jackson,USB Cable,10,10.00,100.00,2026-02-08,North
-1014,Noah Harris,Webcam,2,120.00,240.00,2026-02-10,South
-1015,Olivia Clark,Headphones,1,80.00,80.00,2026-02-12,East
+Date,Product_Category,Product_Name,Region,Quantity,Unit_Price,Total_Sales,Sales_Rep
+2026-01-05,Electronics,Laptop Pro 15,North,12,1299.99,15599.88,Alice Johnson
+2026-01-05,Electronics,Wireless Mouse,North,45,29.99,1349.55,Alice Johnson
+2026-01-05,Furniture,Office Chair Deluxe,North,8,349.99,2799.92,Alice Johnson
+2026-01-05,Office Supplies,Printer Paper Box,North,30,24.99,749.70,Alice Johnson
+2026-01-06,Electronics,USB-C Cable,South,120,15.99,1918.80,Bob Smith
+2026-01-06,Furniture,Standing Desk,South,5,599.99,2999.95,Bob Smith
+2026-01-06,Office Supplies,Pen Set Premium,South,50,12.99,649.50,Bob Smith
+2026-01-07,Electronics,Laptop Pro 15,East,15,1299.99,19499.85,Carol White
+2026-01-07,Electronics,Wireless Keyboard,East,25,79.99,1999.75,Carol White
+2026-01-08,Furniture,Bookshelf Modern,West,10,199.99,1999.90,David Lee
+2026-01-08,Office Supplies,Notebook Bundle,West,75,8.99,674.25,David Lee
+2026-01-10,Electronics,Monitor 27inch,North,18,399.99,7199.82,Alice Johnson
+2026-01-12,Electronics,Webcam HD,South,32,89.99,2879.68,Bob Smith
+2026-01-12,Furniture,Office Chair Deluxe,South,12,349.99,4199.88,Bob Smith
+2026-01-15,Electronics,Laptop Pro 15,West,20,1299.99,25999.80,David Lee
+2026-01-15,Office Supplies,Stapler Heavy Duty,West,40,19.99,799.60,David Lee
+2026-01-18,Furniture,Standing Desk,East,8,599.99,4799.92,Carol White
+2026-01-18,Electronics,USB-C Cable,East,95,15.99,1519.05,Carol White
+2026-01-20,Office Supplies,Printer Paper Box,North,55,24.99,1374.45,Alice Johnson
+2026-01-22,Electronics,Wireless Mouse,South,60,29.99,1799.40,Bob Smith
+2026-01-25,Furniture,Bookshelf Modern,North,15,199.99,2999.85,Alice Johnson
+2026-01-28,Electronics,Monitor 27inch,West,22,399.99,8799.78,David Lee
+2026-02-01,Electronics,Laptop Pro 15,South,18,1299.99,23399.82,Bob Smith
+2026-02-01,Office Supplies,Pen Set Premium,South,65,12.99,844.35,Bob Smith
+2026-02-03,Furniture,Office Chair Deluxe,East,14,349.99,4899.86,Carol White
+2026-02-05,Electronics,Wireless Keyboard,North,30,79.99,2399.70,Alice Johnson
+2026-02-05,Office Supplies,Notebook Bundle,North,90,8.99,809.10,Alice Johnson
+2026-02-08,Electronics,Webcam HD,West,28,89.99,2519.72,David Lee
+2026-02-10,Furniture,Standing Desk,North,6,599.99,3599.94,Alice Johnson
+2026-02-12,Electronics,USB-C Cable,South,110,15.99,1758.90,Bob Smith
+2026-02-15,Office Supplies,Stapler Heavy Duty,East,45,19.99,899.55,Carol White
+2026-02-15,Electronics,Monitor 27inch,East,25,399.99,9999.75,Carol White
+2026-02-18,Furniture,Bookshelf Modern,South,12,199.99,2399.88,Bob Smith
+2026-02-20,Electronics,Laptop Pro 15,East,22,1299.99,28599.78,Carol White
+2026-02-22,Office Supplies,Printer Paper Box,West,60,24.99,1499.40,David Lee
+2026-02-25,Electronics,Wireless Mouse,North,70,29.99,2099.30,Alice Johnson
+2026-02-28,Furniture,Office Chair Deluxe,West,16,349.99,5599.84,David Lee
+2026-03-01,Electronics,Laptop Pro 15,North,25,1299.99,32499.75,Alice Johnson
+2026-03-03,Office Supplies,Pen Set Premium,East,80,12.99,1039.20,Carol White
+2026-03-05,Furniture,Standing Desk,South,10,599.99,5999.90,Bob Smith
+2026-03-05,Electronics,Webcam HD,South,35,89.99,3149.65,Bob Smith
+2026-03-08,Electronics,USB-C Cable,West,125,15.99,1998.75,David Lee
+2026-03-10,Office Supplies,Notebook Bundle,South,100,8.99,899.00,Bob Smith
+2026-03-12,Electronics,Monitor 27inch,North,20,399.99,7999.80,Alice Johnson
+2026-03-12,Furniture,Bookshelf Modern,North,18,199.99,3599.82,Alice Johnson
+2026-03-15,Electronics,Wireless Keyboard,West,35,79.99,2799.65,David Lee
+2026-03-15,Office Supplies,Stapler Heavy Duty,West,50,19.99,999.50,David Lee

@@ -7,7 +7,7 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use nbformat::v4::{Cell, Output};
-use notify::{Watcher, RecursiveMode, Event as NotifyEvent, EventKind};
+use notify::{Event as NotifyEvent, EventKind, RecursiveMode, Watcher};
 use ratatui::{
     backend::{Backend, CrosstermBackend},
     layout::{Constraint, Direction, Layout, Rect},
@@ -125,7 +125,6 @@ impl App {
         }
     }
 
-
     // Convert RGB color to closest ANSI indexed color
     fn rgb_to_ansi(&self, r: u8, g: u8, b: u8) -> Color {
         // Calculate relative brightness
@@ -133,8 +132,8 @@ impl App {
 
         // Check if it's grayscale
         let is_gray = (r as i16 - g as i16).abs() < 30
-                   && (g as i16 - b as i16).abs() < 30
-                   && (r as i16 - b as i16).abs() < 30;
+            && (g as i16 - b as i16).abs() < 30
+            && (r as i16 - b as i16).abs() < 30;
 
         if is_gray {
             // Grayscale handling - different for light vs dark themes
@@ -170,15 +169,15 @@ impl App {
         if saturation < 40 {
             if self.is_dark_theme {
                 return if brightness > 128 {
-                    Color::Indexed(7)  // White
+                    Color::Indexed(7) // White
                 } else {
-                    Color::Indexed(8)  // Bright Black (gray)
+                    Color::Indexed(8) // Bright Black (gray)
                 };
             } else {
                 return if brightness > 128 {
-                    Color::Indexed(8)  // Gray
+                    Color::Indexed(8) // Gray
                 } else {
-                    Color::Indexed(0)  // Black
+                    Color::Indexed(0) // Black
                 };
             }
         }
@@ -201,21 +200,21 @@ impl App {
                 return if use_bright {
                     Color::Indexed(11) // Bright Yellow
                 } else {
-                    Color::Indexed(3)  // Yellow
+                    Color::Indexed(3) // Yellow
                 };
             } else if b > g + 40 {
                 // Red + Blue = Magenta
                 return if use_bright {
                     Color::Indexed(13) // Bright Magenta
                 } else {
-                    Color::Indexed(5)  // Magenta
+                    Color::Indexed(5) // Magenta
                 };
             } else {
                 // Pure Red
                 return if use_bright {
-                    Color::Indexed(9)  // Bright Red
+                    Color::Indexed(9) // Bright Red
                 } else {
-                    Color::Indexed(1)  // Red
+                    Color::Indexed(1) // Red
                 };
             }
         }
@@ -227,21 +226,21 @@ impl App {
                 return if use_bright {
                     Color::Indexed(14) // Bright Cyan
                 } else {
-                    Color::Indexed(6)  // Cyan
+                    Color::Indexed(6) // Cyan
                 };
             } else if r > b + 40 {
                 // Green + Red = Yellow
                 return if use_bright {
                     Color::Indexed(11) // Bright Yellow
                 } else {
-                    Color::Indexed(3)  // Yellow
+                    Color::Indexed(3) // Yellow
                 };
             } else {
                 // Pure Green
                 return if use_bright {
                     Color::Indexed(10) // Bright Green
                 } else {
-                    Color::Indexed(2)  // Green
+                    Color::Indexed(2) // Green
                 };
             }
         }
@@ -253,21 +252,21 @@ impl App {
                 return if use_bright {
                     Color::Indexed(13) // Bright Magenta
                 } else {
-                    Color::Indexed(5)  // Magenta
+                    Color::Indexed(5) // Magenta
                 };
             } else if g > r + 40 {
                 // Blue + Green = Cyan
                 return if use_bright {
                     Color::Indexed(14) // Bright Cyan
                 } else {
-                    Color::Indexed(6)  // Cyan
+                    Color::Indexed(6) // Cyan
                 };
             } else {
                 // Pure Blue
                 return if use_bright {
                     Color::Indexed(12) // Bright Blue
                 } else {
-                    Color::Indexed(4)  // Blue
+                    Color::Indexed(4) // Blue
                 };
             }
         }
@@ -300,7 +299,7 @@ impl App {
         if self.is_dark_theme {
             Color::Indexed(13) // Bright Magenta
         } else {
-            Color::Indexed(5)  // Magenta
+            Color::Indexed(5) // Magenta
         }
     }
 
@@ -309,16 +308,16 @@ impl App {
         if self.is_dark_theme {
             Color::Indexed(10) // Bright Green
         } else {
-            Color::Indexed(2)  // Green
+            Color::Indexed(2) // Green
         }
     }
 
     #[allow(dead_code)]
     fn comment_color(&self) -> Color {
         if self.is_dark_theme {
-            Color::Indexed(8)  // Bright Black (typically gray)
+            Color::Indexed(8) // Bright Black (typically gray)
         } else {
-            Color::Indexed(8)  // Same - comments should be subdued
+            Color::Indexed(8) // Same - comments should be subdued
         }
     }
 
@@ -327,7 +326,7 @@ impl App {
         if self.is_dark_theme {
             Color::Indexed(11) // Bright Yellow
         } else {
-            Color::Indexed(3)  // Yellow
+            Color::Indexed(3) // Yellow
         }
     }
 
@@ -336,7 +335,7 @@ impl App {
         if self.is_dark_theme {
             Color::Indexed(14) // Bright Cyan
         } else {
-            Color::Indexed(6)  // Cyan
+            Color::Indexed(6) // Cyan
         }
     }
 
@@ -345,10 +344,9 @@ impl App {
     #[allow(dead_code)]
     fn highlight_python_simple(&self, code: &str) -> Vec<Line<'static>> {
         let keywords = [
-            "import", "from", "as", "def", "class", "if", "elif", "else",
-            "for", "while", "return", "yield", "break", "continue", "pass",
-            "try", "except", "finally", "raise", "with", "async", "await",
-            "lambda", "and", "or", "not", "in", "is", "True", "False", "None",
+            "import", "from", "as", "def", "class", "if", "elif", "else", "for", "while", "return",
+            "yield", "break", "continue", "pass", "try", "except", "finally", "raise", "with",
+            "async", "await", "lambda", "and", "or", "not", "in", "is", "True", "False", "None",
         ];
 
         let keyword_color = self.keyword_color();
@@ -402,7 +400,8 @@ impl App {
                         // Find end of triple quote string (simplified)
                         while i < chars.len() {
                             string_content.push(chars[i]);
-                            if i >= 2 && chars[i] == ch && chars[i-1] == ch && chars[i-2] == ch {
+                            if i >= 2 && chars[i] == ch && chars[i - 1] == ch && chars[i - 2] == ch
+                            {
                                 break;
                             }
                             i += 1;
@@ -443,7 +442,10 @@ impl App {
                                     .fg(keyword_color)
                                     .add_modifier(Modifier::BOLD),
                             ));
-                        } else if current.chars().all(|c| c.is_numeric() || c == '.' || c == '_') {
+                        } else if current
+                            .chars()
+                            .all(|c| c.is_numeric() || c == '.' || c == '_')
+                        {
                             // Numbers
                             spans.push(Span::styled(
                                 current.clone(),
@@ -518,7 +520,8 @@ impl App {
         match cell {
             Cell::Code { .. } => {
                 // Get language from notebook metadata
-                let lang = self.notebook
+                let lang = self
+                    .notebook
                     .metadata
                     .language_info
                     .as_ref()
@@ -538,20 +541,27 @@ impl App {
 
     fn highlight_code(&self, code: &str, language: &str) -> Vec<Line<'static>> {
         // Try multiple themes in order of preference - use vibrant dark themes
-        let theme = self.theme_set.themes.get("base16-eighties.dark")
+        let theme = self
+            .theme_set
+            .themes
+            .get("base16-eighties.dark")
             .or_else(|| self.theme_set.themes.get("base16-mocha.dark"))
             .or_else(|| self.theme_set.themes.get("base16-ocean.dark"))
             .unwrap_or_else(|| self.theme_set.themes.values().next().unwrap());
 
         // Try to find syntax by name first, then by common aliases
-        let syntax = self.syntax_set.find_syntax_by_name(language)
+        let syntax = self
+            .syntax_set
+            .find_syntax_by_name(language)
             .or_else(|| {
                 // Try lowercase version
-                self.syntax_set.find_syntax_by_name(&language.to_lowercase())
+                self.syntax_set
+                    .find_syntax_by_name(&language.to_lowercase())
             })
             .or_else(|| {
                 // Try as extension
-                self.syntax_set.find_syntax_by_extension(&language.to_lowercase())
+                self.syntax_set
+                    .find_syntax_by_extension(&language.to_lowercase())
             })
             .or_else(|| {
                 // Common language mappings
@@ -597,9 +607,7 @@ impl App {
 
                 spans.push(Span::styled(
                     text.to_string(),
-                    Style::default()
-                        .fg(color)
-                        .add_modifier(modifier),
+                    Style::default().fg(color).add_modifier(modifier),
                 ));
             }
             lines.push(Line::from(spans));
@@ -620,7 +628,8 @@ impl App {
                 if in_code_block {
                     // End of code block - highlight and add it
                     if !code_block_content.is_empty() {
-                        let highlighted = self.highlight_code(&code_block_content, &code_block_language);
+                        let highlighted =
+                            self.highlight_code(&code_block_content, &code_block_language);
                         lines.extend(highlighted);
                     }
                     code_block_content.clear();
@@ -645,76 +654,81 @@ impl App {
 
             // Headings
             if line.starts_with("# ") {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        line.to_string(),
-                        Style::default()
-                            .fg(self.heading_color(1))
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    line.to_string(),
+                    Style::default()
+                        .fg(self.heading_color(1))
+                        .add_modifier(Modifier::BOLD),
+                )]));
             } else if line.starts_with("## ") {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        line.to_string(),
-                        Style::default()
-                            .fg(self.heading_color(2))
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    line.to_string(),
+                    Style::default()
+                        .fg(self.heading_color(2))
+                        .add_modifier(Modifier::BOLD),
+                )]));
             } else if line.starts_with("### ") {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        line.to_string(),
-                        Style::default()
-                            .fg(self.heading_color(3))
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    line.to_string(),
+                    Style::default()
+                        .fg(self.heading_color(3))
+                        .add_modifier(Modifier::BOLD),
+                )]));
             } else if line.starts_with("#### ") {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        line.to_string(),
-                        Style::default()
-                            .fg(self.heading_color(4))
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    line.to_string(),
+                    Style::default()
+                        .fg(self.heading_color(4))
+                        .add_modifier(Modifier::BOLD),
+                )]));
             // Horizontal rule
             } else if line.trim() == "---" || line.trim() == "***" || line.trim() == "___" {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        "─".repeat(60),
-                        Style::default().fg(Color::Indexed(8)), // Bright Black (gray)
-                    ),
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    "─".repeat(60),
+                    Style::default().fg(Color::Indexed(8)), // Bright Black (gray)
+                )]));
             // Block quote
             } else if line.starts_with("> ") {
-                let quote_color = if self.is_dark_theme { Color::Indexed(11) } else { Color::Indexed(4) }; // Yellow/Blue
+                let quote_color = if self.is_dark_theme {
+                    Color::Indexed(11)
+                } else {
+                    Color::Indexed(4)
+                }; // Yellow/Blue
                 lines.push(Line::from(vec![
                     Span::styled("┃ ", Style::default().fg(quote_color)),
-                    Span::styled(
-                        line[2..].to_string(),
-                        Style::default().fg(quote_color),
-                    ),
+                    Span::styled(line[2..].to_string(), Style::default().fg(quote_color)),
                 ]));
             // Lists
             } else if line.starts_with("- ") || line.starts_with("* ") {
                 let content = self.parse_inline_markdown(&line[2..]);
-                let list_color = if self.is_dark_theme { Color::Indexed(11) } else { Color::Indexed(4) }; // Yellow/Blue
+                let list_color = if self.is_dark_theme {
+                    Color::Indexed(11)
+                } else {
+                    Color::Indexed(4)
+                }; // Yellow/Blue
                 let mut spans = vec![Span::styled("  • ", Style::default().fg(list_color))];
                 spans.extend(content);
                 lines.push(Line::from(spans));
-            } else if line.trim_start().chars().next().map_or(false, |c| c.is_numeric())
-                && line.contains(". ") {
+            } else if line
+                .trim_start()
+                .chars()
+                .next()
+                .map_or(false, |c| c.is_numeric())
+                && line.contains(". ")
+            {
                 // Numbered list
                 if let Some(pos) = line.find(". ") {
                     let number = &line[..pos].trim_start();
                     let content = self.parse_inline_markdown(&line[pos + 2..]);
-                    let list_color = if self.is_dark_theme { Color::Indexed(11) } else { Color::Indexed(4) }; // Yellow/Blue
-                    let mut spans = vec![
-                        Span::styled(format!(" {} ", number), Style::default().fg(list_color)),
-                    ];
+                    let list_color = if self.is_dark_theme {
+                        Color::Indexed(11)
+                    } else {
+                        Color::Indexed(4)
+                    }; // Yellow/Blue
+                    let mut spans = vec![Span::styled(
+                        format!(" {} ", number),
+                        Style::default().fg(list_color),
+                    )];
                     spans.extend(content);
                     lines.push(Line::from(spans));
                 } else {
@@ -865,23 +879,19 @@ impl App {
 
         match output {
             Output::Stream { name, text } => {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("[{}] ", name),
-                        Style::default().fg(Color::Indexed(10)), // Bright Green
-                    ),
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    format!("[{}] ", name),
+                    Style::default().fg(Color::Indexed(10)), // Bright Green
+                )]));
                 for line in text.0.lines() {
                     lines.push(Line::from(line.to_string()));
                 }
             }
             Output::ExecuteResult(result) => {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("[Out {}] ", result.execution_count),
-                        Style::default().fg(Color::Indexed(12)), // Bright Blue
-                    ),
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    format!("[Out {}] ", result.execution_count),
+                    Style::default().fg(Color::Indexed(12)), // Bright Blue
+                )]));
                 // Simple text output for now
                 if let Ok(json_val) = serde_json::to_value(&result.data) {
                     if let Some(obj) = json_val.as_object() {
@@ -912,18 +922,16 @@ impl App {
                 }
             }
             Output::Error(error) => {
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("Error: {}", error.ename),
-                        Style::default().fg(Color::Indexed(9)).add_modifier(Modifier::BOLD), // Bright Red
-                    ),
-                ]));
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("  {}", error.evalue),
-                        Style::default().fg(Color::Indexed(9)), // Bright Red
-                    ),
-                ]));
+                lines.push(Line::from(vec![Span::styled(
+                    format!("Error: {}", error.ename),
+                    Style::default()
+                        .fg(Color::Indexed(9))
+                        .add_modifier(Modifier::BOLD), // Bright Red
+                )]));
+                lines.push(Line::from(vec![Span::styled(
+                    format!("  {}", error.evalue),
+                    Style::default().fg(Color::Indexed(9)), // Bright Red
+                )]));
             }
         }
 
@@ -937,14 +945,15 @@ pub fn execute(args: ViewArgs) -> Result<()> {
 
     // Setup file watcher
     let (tx, rx) = mpsc::channel();
-    let mut watcher = notify::recommended_watcher(move |res: Result<NotifyEvent, notify::Error>| {
-        if let Ok(event) = res {
-            // Only notify on modify events
-            if matches!(event.kind, EventKind::Modify(_)) {
-                let _ = tx.send(());
+    let mut watcher =
+        notify::recommended_watcher(move |res: Result<NotifyEvent, notify::Error>| {
+            if let Ok(event) = res {
+                // Only notify on modify events
+                if matches!(event.kind, EventKind::Modify(_)) {
+                    let _ = tx.send(());
+                }
             }
-        }
-    })?;
+        })?;
 
     // Watch the parent directory (watching the file directly can miss some editors)
     if let Some(parent) = file_path.parent() {
@@ -978,7 +987,11 @@ pub fn execute(args: ViewArgs) -> Result<()> {
     Ok(())
 }
 
-fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App, file_change_rx: mpsc::Receiver<()>) -> io::Result<()> {
+fn run_app<B: Backend>(
+    terminal: &mut Terminal<B>,
+    mut app: App,
+    file_change_rx: mpsc::Receiver<()>,
+) -> io::Result<()> {
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
 
@@ -1061,7 +1074,10 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
         .unwrap_or_else(|| "Unknown".to_string());
 
     let title = vec![
-        Span::styled("Notebook Viewer", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "Notebook Viewer",
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
         Span::raw(format!(" | Kernel: {} | ", kernel)),
         Span::styled(
             format!("{} cells", app.notebook.cells.len()),
@@ -1146,25 +1162,28 @@ fn render_cell_detail(f: &mut Frame, app: &mut App, area: Rect) {
         };
 
         // Add outputs for code cells
-        if let Cell::Code { outputs, execution_count, .. } = cell {
+        if let Cell::Code {
+            outputs,
+            execution_count,
+            ..
+        } = cell
+        {
             if !outputs.is_empty() {
                 content_lines.push(Line::from(""));
-                content_lines.push(Line::from(vec![
-                    Span::styled(
-                        "─".repeat(40),
-                        Style::default().fg(Color::Indexed(8)), // Bright Black (gray)
-                    ),
-                ]));
+                content_lines.push(Line::from(vec![Span::styled(
+                    "─".repeat(40),
+                    Style::default().fg(Color::Indexed(8)), // Bright Black (gray)
+                )]));
                 let output_header = match execution_count {
                     Some(n) => format!("Outputs (exec: {})", n),
                     None => "Outputs".to_string(),
                 };
-                content_lines.push(Line::from(vec![
-                    Span::styled(
-                        output_header,
-                        Style::default().fg(Color::Indexed(10)).add_modifier(Modifier::BOLD), // Bright Green
-                    ),
-                ]));
+                content_lines.push(Line::from(vec![Span::styled(
+                    output_header,
+                    Style::default()
+                        .fg(Color::Indexed(10))
+                        .add_modifier(Modifier::BOLD), // Bright Green
+                )]));
                 content_lines.push(Line::from(""));
 
                 for output in outputs {

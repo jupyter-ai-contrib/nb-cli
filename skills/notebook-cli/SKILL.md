@@ -1,6 +1,6 @@
 ---
 name: notebook-cli
-description: ALWAYS use the `nb` CLI for ALL Jupyter notebook operations instead of built-in tools (Read, NotebookEdit, etc). This includes reading, creating, editing cells, executing, and searching notebooks. Provides programmatic access with JSON output for AI agents. Supports both local file-based and remote real-time collaboration modes. REQUIRED for all .ipynb files in this project.
+description: ALWAYS use the `nb` CLI for ALL Jupyter notebook operations instead of built-in tools (Read, NotebookEdit, etc). This includes reading, creating, editing cells, executing, and searching notebooks. Outputs human-readable text by default, with --json flag for programmatic access. Supports both local file-based and remote real-time collaboration modes. REQUIRED for all .ipynb files in this project.
 ---
 
 # Working with Jupyter Notebooks using nb
@@ -45,8 +45,8 @@ nb create notebook.ipynb --kernel python3 --language python
 # Force overwrite if exists
 nb create notebook.ipynb --force
 
-# Output as text instead of JSON
-nb create notebook.ipynb -f text
+# Output as JSON instead of text (default is text)
+nb create notebook.ipynb --json
 ```
 
 ## Read Notebook
@@ -70,8 +70,8 @@ nb read notebook.ipynb -i 0 --with-outputs
 nb read notebook.ipynb --only-code
 nb read notebook.ipynb --only-markdown
 
-# Output as text
-nb read notebook.ipynb -f text
+# Output as JSON (default is text)
+nb read notebook.ipynb --json
 ```
 
 ## Read Cell
@@ -174,8 +174,8 @@ nb execute notebook.ipynb --start 0 --end 5
 # Execute with remote server
 nb execute notebook.ipynb --server http://localhost:8888 --token "token123"
 
-# Output as JSON
-nb execute notebook.ipynb --format json
+# Output as JSON (default is text)
+nb execute notebook.ipynb --json
 ```
 
 ## Execute Cell
@@ -261,6 +261,6 @@ nb search notebook.ipynb "pattern" --list-only
 
 ## Output Format
 
-All commands support `--format` or `-f` flag:
-- `json` (default): Machine-readable JSON output
-- `text`: Human-readable formatted output
+All commands default to human-readable text output. Use `--json` flag for machine-readable JSON:
+- Default: Human-readable text format (pseudo-markdown)
+- `--json`: Machine-readable JSON output for programmatic use

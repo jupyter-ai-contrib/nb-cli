@@ -14,8 +14,7 @@ pub enum CellType {
     Raw,
 }
 
-#[derive(Clone, ValueEnum)]
-#[value(rename_all = "lowercase")]
+#[derive(Clone, Debug)]
 pub enum OutputFormat {
     Json,
     Text,
