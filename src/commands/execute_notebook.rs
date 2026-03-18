@@ -1,3 +1,4 @@
+use crate::commands::common::OutputFormat;
 use crate::execution::remote::ydoc::YDocClient;
 use crate::execution::{create_backend, types::ExecutionConfig, types::ExecutionMode};
 use crate::notebook::{read_notebook, write_notebook_atomic};
@@ -52,24 +53,6 @@ pub struct ExecuteNotebookArgs {
     /// Output in JSON format instead of text
     #[arg(long)]
     pub json: bool,
-}
-
-#[derive(Clone, Debug)]
-pub enum OutputFormat {
-    Json,
-    Text,
-}
-
-impl std::str::FromStr for OutputFormat {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self> {
-        match s.to_lowercase().as_str() {
-            "json" => Ok(OutputFormat::Json),
-            "text" => Ok(OutputFormat::Text),
-            _ => anyhow::bail!("Invalid format: '{}'. Must be 'json' or 'text'", s),
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize)]
