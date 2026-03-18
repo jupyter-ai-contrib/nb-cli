@@ -196,7 +196,7 @@ async fn execute_with_realtime(
         cell_type: cell_type_str.to_string(),
         cell_id: cell_id.to_string(),
         index: insert_index,
-        total_cells: notebook.cells.len(),
+        total_cells: notebook.cells.len() + 1,
     };
 
     let format = if args.json {
@@ -347,7 +347,7 @@ fn output_result(result: &AddCellResult, format: &OutputFormat) -> Result<()> {
             println!("Added {} cell to: {}", result.cell_type, result.file);
             println!("Cell ID: {}", result.cell_id);
             println!(
-                "Position: {} (total: {} cells)",
+                "Index: {} (total: {} cells)",
                 result.index, result.total_cells
             );
         }

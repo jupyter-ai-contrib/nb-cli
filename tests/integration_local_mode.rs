@@ -654,6 +654,58 @@ fn test_add_cell_empty_source() {
     assert_eq!(json["index"], 0);
 }
 
+#[test]
+fn test_add_consecutive_cells_correct_count() {
+    // Regression test for issue #24 - cell count should be correct after each addition
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("empty.ipynb", "test.ipynb");
+
+    // First cell
+    let result1 = env
+        .run(&[
+            "cell",
+            "add",
+            nb_path.to_str().unwrap(),
+            "--source",
+            "a = 10",
+            "--json",
+        ])
+        .assert_success();
+    let json1 = result1.json_value();
+    assert_eq!(json1["index"], 0);
+    assert_eq!(json1["total_cells"], 1);
+
+    // Second cell
+    let result2 = env
+        .run(&[
+            "cell",
+            "add",
+            nb_path.to_str().unwrap(),
+            "--source",
+            "b = 20",
+            "--json",
+        ])
+        .assert_success();
+    let json2 = result2.json_value();
+    assert_eq!(json2["index"], 1);
+    assert_eq!(json2["total_cells"], 2);
+
+    // Third cell
+    let result3 = env
+        .run(&[
+            "cell",
+            "add",
+            nb_path.to_str().unwrap(),
+            "--source",
+            "c = 30",
+            "--json",
+        ])
+        .assert_success();
+    let json3 = result3.json_value();
+    assert_eq!(json3["index"], 2);
+    assert_eq!(json3["total_cells"], 3);
+}
+
 // ==================== CELL UPDATE TESTS ====================
 
 #[test]
