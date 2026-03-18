@@ -105,27 +105,18 @@ async fn execute_with_realtime(
     args: UpdateCellArgs,
     mode: crate::execution::types::ExecutionMode,
 ) -> Result<()> {
-    use crate::execution::remote::{session_check, ydoc_notebook_ops};
+    use crate::execution::remote::ydoc_notebook_ops;
 
     let (server_url, token) = match mode {
         crate::execution::types::ExecutionMode::Remote { server_url, token } => (server_url, token),
         _ => bail!("Expected remote execution mode"),
     };
 
-    // Extract notebook filename for session check
+    // Extract notebook filename for Y.js connection
     let notebook_filename = std::path::Path::new(&args.file)
         .file_name()
         .and_then(|n| n.to_str())
         .context("Invalid notebook path")?;
-
-    // Check if notebook has an active session
-    let has_session = session_check::has_active_session(&server_url, &token, notebook_filename)
-        .await
-        .unwrap_or(false);
-
-    if !has_session {
-        return execute_file_based(args);
-    }
 
     // Read notebook to find the cell
     let notebook = notebook::read_notebook(&args.file).context("Failed to read notebook")?;

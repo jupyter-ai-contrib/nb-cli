@@ -17,6 +17,7 @@ struct Session {
 /// Check if a notebook file has an active session
 ///
 /// Returns true if the notebook is currently open in JupyterLab
+#[allow(dead_code)]
 pub async fn has_active_session(
     server_url: &str,
     token: &str,
