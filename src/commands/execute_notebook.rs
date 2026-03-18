@@ -296,8 +296,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
 
                     // Sync changes to server
                     match ydoc_client.sync().await {
-                        Ok(_) => {
-                        }
+                        Ok(_) => {}
                         Err(e) => {
                             eprintln!("  Warning: Failed to sync Y.js updates: {}", e);
                         }

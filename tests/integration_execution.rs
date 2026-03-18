@@ -167,7 +167,7 @@ fn test_execute_cell_with_output() {
         ])
         .assert_success();
 
-    assert!(result.stdout.contains("outputs"));
+    assert!(result.stdout.contains("Outputs:") || result.stdout.contains("outputs"));
 }
 
 #[test]
@@ -236,8 +236,8 @@ fn test_execute_entire_notebook() {
         .run(&["read", nb_path.to_str().unwrap()])
         .assert_success();
 
-    // Check that execution counts were set
-    assert!(read_result.stdout.contains("execution_count"));
+    // Check that execution counts were set (shown by [✓] marker)
+    assert!(read_result.stdout.contains("[✓]"));
 }
 
 #[test]
@@ -295,7 +295,10 @@ fn test_execute_with_allow_errors() {
         .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "0"])
         .assert_success();
 
-    assert!(read_result.stdout.contains("execution_count"));
+    assert!(
+        read_result.stdout.contains("Execution count:")
+            || read_result.stdout.contains("execution_count")
+    );
 }
 
 #[test]

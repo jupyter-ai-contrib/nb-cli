@@ -460,12 +460,6 @@ fn output_notebook_structure(
             println!("\nCells:");
             for (index, cell) in notebook.cells.iter().enumerate() {
                 let source = common::cell_to_string(cell);
-                let preview = if source.len() > 80 {
-                    format!("{}...", &source[..77])
-                } else {
-                    source
-                }
-                .replace('\n', " ");
 
                 let (cell_type, executed) = match cell {
                     Cell::Code {
@@ -482,13 +476,18 @@ fn output_notebook_structure(
                 };
 
                 println!(
-                    "  {} [{}]{} (ID: {}): {}",
+                    "  {} [{}]{} (ID: {}):",
                     index,
                     cell_type,
                     executed_marker,
                     common::cell_id_to_string(cell),
-                    preview
                 );
+
+                // Indent cell content for better readability
+                for line in source.lines() {
+                    println!("    {}", line);
+                }
+                println!();
             }
         }
     }
