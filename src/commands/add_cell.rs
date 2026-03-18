@@ -99,19 +99,14 @@ async fn execute_with_realtime(
         .and_then(|n| n.to_str())
         .context("Invalid notebook path")?;
 
-    eprintln!("Checking if notebook is open in JupyterLab...");
-
     // Check if notebook has an active session
     let has_session = session_check::has_active_session(&server_url, &token, notebook_filename)
         .await
         .unwrap_or(false);
 
     if !has_session {
-        eprintln!("Notebook is not open - using file-based update");
         return execute_file_based(args);
     }
-
-    eprintln!("Notebook is open - using real-time Y.js updates");
 
     // Read notebook to calculate insertion index and create cell
     let notebook = notebook::read_notebook(&args.file).context("Failed to read notebook")?;
@@ -197,8 +192,6 @@ async fn execute_with_realtime(
     )
     .await
     .context("Failed to add cell via Y.js")?;
-
-    eprintln!("✓ Cell added via Y.js - changes will be persisted by JupyterLab");
 
     // Output result
     let cell_type_str = match args.cell_type {

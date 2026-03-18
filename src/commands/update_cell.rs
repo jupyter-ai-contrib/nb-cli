@@ -178,8 +178,6 @@ async fn execute_with_realtime(
     .await
     .context("Failed to update cell via Y.js")?;
 
-    eprintln!("✓ Cell updated via Y.js - changes will be persisted by JupyterLab");
-
     // Output result
     let result = UpdateCellResult {
         file: args.file.clone(),
