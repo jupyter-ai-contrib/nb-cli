@@ -152,22 +152,22 @@ fn test_execute_cell_with_output() {
 
     let nb_path = env.copy_fixture("for_execution.ipynb", "test.ipynb");
 
-    // Execute cell 0 first (defines x)
-    env.run(&["execute", nb_path.to_str().unwrap(), "--cell-index", "0"])
+    // Execute entire notebook so cell 2 can print the result
+    env.run(&["execute", nb_path.to_str().unwrap()])
         .assert_success();
 
-    // Verify output was captured
+    // Verify output was captured from cell 2 (which has print statement)
     let result = env
         .run(&[
             "read",
             nb_path.to_str().unwrap(),
             "--cell-index",
-            "0",
+            "2",
             "--with-outputs",
         ])
         .assert_success();
 
-    assert!(result.stdout.contains("Outputs:") || result.stdout.contains("outputs"));
+    assert!(result.stdout.contains("Outputs:") && result.stdout.contains("Result: 52"));
 }
 
 #[test]

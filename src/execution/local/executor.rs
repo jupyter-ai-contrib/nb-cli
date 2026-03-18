@@ -110,7 +110,7 @@ impl LocalExecutor {
             match message.content {
                 JupyterMessageContent::Status(status) => {
                     if status.execution_state == ExecutionState::Idle {
-                        // Execution complete
+                        // Execution complete on IOPub
                         break;
                     }
                 }
@@ -168,6 +168,25 @@ impl LocalExecutor {
                 _ => {
                     // Ignore other message types
                 }
+            }
+        }
+
+        // Read execute_reply from shell channel to get execution_count
+        // This is important for cells that don't produce output (no ExecuteResult)
+        match tokio::time::timeout_at(deadline, shell_socket.read()).await {
+            Ok(Ok(reply)) => {
+                if let JupyterMessageContent::ExecuteReply(reply_content) = reply.content {
+                    // Use execution_count from reply if we don't have one yet
+                    if execution_count.is_none() {
+                        execution_count = Some(reply_content.execution_count.value() as i64);
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                eprintln!("Warning: Failed to read execute_reply: {}", e);
+            }
+            Err(_) => {
+                eprintln!("Warning: Timeout reading execute_reply");
             }
         }
 
