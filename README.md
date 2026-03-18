@@ -123,6 +123,14 @@ nb connect
 
 Automatically finds running Jupyter servers, validates them, and connects. If multiple servers are found, you'll get an interactive prompt to choose one.
 
+**Environment-aware detection:**
+```bash
+nb connect --uv    # Detect servers running via uv
+nb connect --pixi  # Detect servers running via pixi
+```
+
+When working with isolated project environments (uv or pixi), use these flags to discover Jupyter servers running within those environments. The CLI will automatically detect your project root and run `jupyter server list` through the appropriate environment manager.
+
 **Manual connection:**
 ```bash
 nb connect --server http://localhost:8888 --token your-jupyter-token
@@ -131,6 +139,8 @@ nb connect --server http://localhost:8888 --token your-jupyter-token
 **Connection options:**
 - `--server`: Server URL (e.g., `http://localhost:8888`)
 - `--token`: Authentication token from Jupyter
+- `--uv`: Use uv to run jupyter commands (mutually exclusive with `--pixi`)
+- `--pixi`: Use pixi to run jupyter commands (mutually exclusive with `--uv`)
 
 ### Connection Persistence
 
@@ -185,7 +195,7 @@ nb disconnect
 | `nb cell delete <path> --cell-index <index>` | Delete a cell |
 | `nb execute <path> --cell-index <index>` | Execute a specific cell |
 | `nb output clear <path>` | Clear cell outputs |
-| `nb connect [--server URL --token TOKEN]` | Connect to Jupyter server (auto-detects if no args) |
+| `nb connect [--server URL --token TOKEN] [--uv\|--pixi]` | Connect to Jupyter server (auto-detects if no args) |
 | `nb status` | Show current connection status |
 | `nb disconnect` | Disconnect from server |
 
