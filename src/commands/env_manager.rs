@@ -80,13 +80,13 @@ impl EnvConfig {
 /// Find the root directory of a uv project
 ///
 /// Searches upward from the current directory for a directory containing
-/// `pyproject.toml` or `uv.lock`
+/// `pyproject.toml`, `uv.toml`, or `uv.lock`
 fn find_uv_project_root() -> Result<PathBuf> {
-    find_project_root(&["pyproject.toml", "uv.lock"]).with_context(|| {
+    find_project_root(&["pyproject.toml", "uv.toml", "uv.lock"]).with_context(|| {
         format!(
             "No uv project found.\n\
             \n\
-            The --uv flag requires a uv project (pyproject.toml or uv.lock) in the\n\
+            The --uv flag requires a uv project (pyproject.toml, uv.toml, or uv.lock) in the\n\
             current directory or any parent directory.\n\
             \n\
             Current directory: {}\n\
@@ -105,13 +105,13 @@ fn find_uv_project_root() -> Result<PathBuf> {
 /// Find the root directory of a pixi project
 ///
 /// Searches upward from the current directory for a directory containing
-/// `pixi.toml` or `pixi.lock`
+/// `pyproject.toml`, `pixi.toml`, or `pixi.lock`
 fn find_pixi_project_root() -> Result<PathBuf> {
-    find_project_root(&["pixi.toml", "pixi.lock"]).with_context(|| {
+    find_project_root(&["pyproject.toml", "pixi.toml", "pixi.lock"]).with_context(|| {
         format!(
             "No pixi project found.\n\
             \n\
-            The --pixi flag requires a pixi project (pixi.toml or pixi.lock) in the\n\
+            The --pixi flag requires a pixi project (pyproject.toml, pixi.toml, or pixi.lock) in the\n\
             current directory or any parent directory.\n\
             \n\
             Current directory: {}\n\
