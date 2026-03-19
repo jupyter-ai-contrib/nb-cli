@@ -1,9 +1,9 @@
+use crate::commands::env_manager::{EnvConfig, EnvManager};
 use crate::config::{Config, JupyterConnection};
 use crate::execution::remote::client::JupyterClient;
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use clap::Args;
-use std::process::Command;
 
 #[derive(Args)]
 pub struct ConnectArgs {
@@ -18,6 +18,14 @@ pub struct ConnectArgs {
     /// Skip validation checks
     #[arg(long)]
     pub skip_validation: bool,
+
+    /// Use uv to run jupyter commands
+    #[arg(long, conflicts_with = "pixi")]
+    pub uv: bool,
+
+    /// Use pixi to run jupyter commands
+    #[arg(long, conflicts_with = "uv")]
+    pub pixi: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +34,13 @@ struct DetectedServer {
     token: String,
     working_dir: String,
     valid: bool,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct JupyterServerInfo {
+    url: String,
+    token: String,
+    root_dir: String,
 }
 
 pub fn execute(args: ConnectArgs) -> Result<()> {
@@ -43,16 +58,42 @@ async fn execute_async(args: ConnectArgs) -> Result<()> {
         return connect_manual(server_url, token, args.skip_validation).await;
     }
 
-    // Auto-detection mode
-    println!("🔍 Detecting running Jupyter servers...");
+    // Create environment configuration
+    let env_config = EnvConfig::from_flags(args.uv, args.pixi)?;
 
-    let servers = detect_jupyter_servers().await?;
+    // Auto-detection mode
+    match env_config.manager {
+        EnvManager::Direct => {
+            println!("🔍 Detecting running Jupyter servers...");
+        }
+        EnvManager::Uv => {
+            println!("🔍 Detecting running Jupyter servers using uv...");
+            if let Some(root) = &env_config.project_root {
+                println!("   Project root: {}", root.display());
+            }
+        }
+        EnvManager::Pixi => {
+            println!("🔍 Detecting running Jupyter servers using pixi...");
+            if let Some(root) = &env_config.project_root {
+                println!("   Project root: {}", root.display());
+            }
+        }
+    }
+
+    let servers = detect_jupyter_servers(&env_config).await?;
 
     if servers.is_empty() {
+        let start_command = match env_config.manager {
+            EnvManager::Direct => "jupyter lab",
+            EnvManager::Uv => "uv run jupyter lab",
+            EnvManager::Pixi => "pixi run jupyter lab",
+        };
+
         bail!(
             "No running Jupyter servers found.\n\
-            \nStart a Jupyter server with:\n  jupyter lab\n  jupyter notebook\n\
-            \nOr connect manually with:\n  nb connect --server URL --token TOKEN"
+            \nStart a Jupyter server with:\n  {}\n\
+            \nOr connect manually with:\n  nb connect --server URL --token TOKEN",
+            start_command
         );
     }
 
@@ -141,12 +182,32 @@ async fn connect_manual(server_url: String, token: String, skip_validation: bool
     Ok(())
 }
 
-async fn detect_jupyter_servers() -> Result<Vec<DetectedServer>> {
-    // Execute `jupyter server list`
-    let output = Command::new("jupyter")
-        .args(&["server", "list"])
+async fn detect_jupyter_servers(env_config: &EnvConfig) -> Result<Vec<DetectedServer>> {
+    // Execute `jupyter server list --json`
+    let mut cmd = env_config.build_jupyter_command(&["server", "list", "--json"]);
+    let output = cmd
         .output()
-        .context("Failed to execute 'jupyter server list'. Is Jupyter installed?")?;
+        .with_context(|| {
+            match env_config.manager {
+                EnvManager::Direct => {
+                    "Failed to execute 'jupyter server list'. Is Jupyter installed?".to_string()
+                }
+                EnvManager::Uv => {
+                    format!(
+                        "Failed to execute 'uv run jupyter server list'. Is uv installed and is jupyter in your project?\n\
+                        Project root: {}",
+                        env_config.project_root.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "unknown".to_string())
+                    )
+                }
+                EnvManager::Pixi => {
+                    format!(
+                        "Failed to execute 'pixi run jupyter server list'. Is pixi installed and is jupyter in your project?\n\
+                        Project root: {}",
+                        env_config.project_root.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "unknown".to_string())
+                    )
+                }
+            }
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -155,69 +216,39 @@ async fn detect_jupyter_servers() -> Result<Vec<DetectedServer>> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Parse output
+    // Parse JSON output (each line is a separate JSON object)
     let mut servers = Vec::new();
 
     for line in stdout.lines() {
-        // Format: http://localhost:8888/?token=abc123 :: /path/to/working/dir
-        if let Some(parsed) = parse_server_line(line) {
-            // Validate server
-            let valid = validate_server(&parsed.url, &parsed.token).await;
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
 
-            servers.push(DetectedServer {
-                url: parsed.url,
-                token: parsed.token,
-                working_dir: parsed.working_dir,
-                valid,
-            });
+        // Try to parse as JSON
+        match serde_json::from_str::<JupyterServerInfo>(line) {
+            Ok(server_info) => {
+                // The URL from JSON already includes the base path
+                let url = server_info.url.trim_end_matches('/').to_string();
+
+                // Validate server
+                let valid = validate_server(&url, &server_info.token).await;
+
+                servers.push(DetectedServer {
+                    url,
+                    token: server_info.token,
+                    working_dir: server_info.root_dir,
+                    valid,
+                });
+            }
+            Err(e) => {
+                // Skip lines that aren't valid JSON (e.g., informational messages)
+                eprintln!("Warning: Failed to parse line as JSON: {} (error: {})", line, e);
+            }
         }
     }
 
     Ok(servers)
-}
-
-struct ParsedServer {
-    url: String,
-    token: String,
-    working_dir: String,
-}
-
-fn parse_server_line(line: &str) -> Option<ParsedServer> {
-    // Format: http://localhost:8888/?token=abc123 :: /path/to/working/dir
-    let parts: Vec<&str> = line.split(" :: ").collect();
-    if parts.len() != 2 {
-        return None;
-    }
-
-    let url_part = parts[0].trim();
-    let working_dir = parts[1].trim().to_string();
-
-    // Parse URL and extract token
-    let url = url::Url::parse(url_part).ok()?;
-
-    // Extract token from query parameters
-    let token = url
-        .query_pairs()
-        .find(|(key, _)| key == "token")
-        .map(|(_, value)| value.to_string())?;
-
-    // Get base URL without query parameters
-    let base_url = format!(
-        "{}://{}{}",
-        url.scheme(),
-        url.host_str()?,
-        if let Some(port) = url.port() {
-            format!(":{}", port)
-        } else {
-            String::new()
-        }
-    );
-
-    Some(ParsedServer {
-        url: base_url,
-        token,
-        working_dir,
-    })
 }
 
 async fn validate_server(server_url: &str, token: &str) -> bool {
