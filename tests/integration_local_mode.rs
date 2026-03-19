@@ -98,7 +98,7 @@ fn join_source(source: &serde_json::Value) -> String {
 // ==================== NOTEBOOK CREATE TESTS ====================
 
 #[test]
-fn test_create_empty_notebook() {
+fn test_create_default_notebook() {
     let env = TestEnv::new();
     let nb_path = env.notebook_path("test.ipynb");
 
@@ -107,35 +107,20 @@ fn test_create_empty_notebook() {
         .assert_success();
 
     let json = result.json_value();
-    assert_eq!(json["template"], "empty");
     assert_eq!(json["kernel"], "python3");
-    assert_eq!(json["cell_count"], 0);
-    assert!(nb_path.exists());
-}
-
-#[test]
-fn test_create_basic_notebook() {
-    let env = TestEnv::new();
-    let nb_path = env.notebook_path("basic.ipynb");
-
-    let result = env
-        .run(&[
-            "create",
-            nb_path.to_str().unwrap(),
-            "--template",
-            "basic",
-            "--json",
-        ])
-        .assert_success();
-
-    let json = result.json_value();
-    assert_eq!(json["template"], "basic");
     assert_eq!(json["cell_count"], 1);
     assert!(nb_path.exists());
+
+    // Verify it's a code cell
+    let read_result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--json"])
+        .assert_success();
+    let read_json = read_result.json_value();
+    assert_eq!(read_json["cells"][0]["cell_type"], "code");
 }
 
 #[test]
-fn test_create_markdown_notebook() {
+fn test_create_with_markdown_flag() {
     let env = TestEnv::new();
     let nb_path = env.notebook_path("markdown.ipynb");
 
@@ -143,15 +128,20 @@ fn test_create_markdown_notebook() {
         .run(&[
             "create",
             nb_path.to_str().unwrap(),
-            "--template",
-            "markdown",
+            "--markdown",
             "--json",
         ])
         .assert_success();
 
     let json = result.json_value();
-    assert_eq!(json["template"], "markdown");
-    assert_eq!(json["cell_count"], 2);
+    assert_eq!(json["cell_count"], 1);
+
+    // Verify it's a markdown cell
+    let read_result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--json"])
+        .assert_success();
+    let read_json = read_result.json_value();
+    assert_eq!(read_json["cells"][0]["cell_type"], "markdown");
 }
 
 #[test]
@@ -210,7 +200,7 @@ fn test_create_with_force_overwrites() {
         .assert_success();
 
     let json = result.json_value();
-    assert_eq!(json["cell_count"], 0); // Should be empty now
+    assert_eq!(json["cell_count"], 1); // Should have one code cell now
 }
 
 #[test]
@@ -223,8 +213,8 @@ fn test_create_text_format() {
         .assert_success();
 
     assert!(result.stdout.contains("Created notebook:"));
-    assert!(result.stdout.contains("Template:"));
     assert!(result.stdout.contains("Kernel:"));
+    assert!(result.stdout.contains("Cells:"));
 }
 
 // ==================== NOTEBOOK READ TESTS ====================
@@ -1336,7 +1326,7 @@ fn test_workflow_create_add_read() {
         .assert_success();
 
     let json = result.json_value();
-    assert_eq!(json["cells"].as_array().unwrap().len(), 2);
+    assert_eq!(json["cells"].as_array().unwrap().len(), 3);
 }
 
 #[test]

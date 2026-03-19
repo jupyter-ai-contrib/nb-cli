@@ -17,7 +17,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Create a new notebook file
+    /// Create a new notebook file (with a single code cell by default)
     Create(commands::create_notebook::CreateArgs),
     /// Read and extract notebook content
     Read(commands::read::ReadArgs),

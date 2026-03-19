@@ -1,23 +1,12 @@
 use crate::commands::common::OutputFormat;
 use crate::notebook;
 use anyhow::{bail, Context, Result};
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use nbformat::v4::{Cell, CellId, CellMetadata, KernelSpec, Metadata, Notebook};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
 use uuid::Uuid;
-
-#[derive(Clone, ValueEnum)]
-#[value(rename_all = "lowercase")]
-pub enum Template {
-    /// Empty notebook with no cells
-    Empty,
-    /// Basic notebook with one empty code cell
-    Basic,
-    /// Markdown template with heading and code cell
-    Markdown,
-}
 
 #[derive(Parser)]
 pub struct CreateArgs {
@@ -37,14 +26,9 @@ pub struct CreateArgs {
     #[arg(long = "language", default_value = "python", value_name = "LANG")]
     pub language: String,
 
-    /// Template type
-    #[arg(
-        short = 't',
-        long = "template",
-        default_value = "empty",
-        value_name = "TYPE"
-    )]
-    pub template: Template,
+    /// Create notebook with a markdown cell instead of code cell
+    #[arg(long)]
+    pub markdown: bool,
 
     /// Overwrite if file exists
     #[arg(long = "force")]
@@ -58,7 +42,6 @@ pub struct CreateArgs {
 #[derive(Serialize)]
 struct CreateResult {
     file: String,
-    template: String,
     kernel: String,
     cell_count: usize,
 }
@@ -93,15 +76,8 @@ pub fn execute(args: CreateArgs) -> Result<()> {
     notebook::write_notebook_atomic(&path, &notebook).context("Failed to write notebook")?;
 
     // Output result
-    let template_name = match args.template {
-        Template::Empty => "empty",
-        Template::Basic => "basic",
-        Template::Markdown => "markdown",
-    };
-
     let result = CreateResult {
         file: path.clone(),
-        template: template_name.to_string(),
         kernel: args.kernel.clone(),
         cell_count: notebook.cells.len(),
     };
@@ -138,33 +114,24 @@ fn create_notebook(args: &CreateArgs) -> Result<Notebook> {
         ..Default::default()
     };
 
-    // Create cells based on template
+    // Create cells based on markdown flag
     let empty_metadata = create_empty_metadata();
 
-    let cells = match args.template {
-        Template::Empty => vec![],
-        Template::Basic => vec![Cell::Code {
+    let cells = if args.markdown {
+        vec![Cell::Markdown {
             id: CellId::from(Uuid::new_v4()),
-            metadata: empty_metadata.clone(),
+            metadata: empty_metadata,
+            source: vec![],  // Empty markdown cell
+            attachments: None,
+        }]
+    } else {
+        vec![Cell::Code {
+            id: CellId::from(Uuid::new_v4()),
+            metadata: empty_metadata,
             execution_count: None,
             source: vec![],
             outputs: vec![],
-        }],
-        Template::Markdown => vec![
-            Cell::Markdown {
-                id: CellId::from(Uuid::new_v4()),
-                metadata: empty_metadata.clone(),
-                source: vec!["# New Notebook\n".to_string()],
-                attachments: None,
-            },
-            Cell::Code {
-                id: CellId::from(Uuid::new_v4()),
-                metadata: empty_metadata,
-                execution_count: None,
-                source: vec![],
-                outputs: vec![],
-            },
-        ],
+        }]
     };
 
     Ok(Notebook {
@@ -198,7 +165,6 @@ fn output_result(result: &CreateResult, format: &OutputFormat) -> Result<()> {
         }
         OutputFormat::Text | OutputFormat::Markdown => {
             println!("Created notebook: {}", result.file);
-            println!("Template: {}", result.template);
             println!("Kernel: {}", result.kernel);
             println!("Cells: {}", result.cell_count);
         }

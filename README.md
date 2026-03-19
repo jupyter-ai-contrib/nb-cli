@@ -109,8 +109,10 @@ This ensures your AI agent uses the `nb` CLI for all notebook operations instead
 ## Quick Start
 
 ```bash
-# Create and build a notebook
+# Create a notebook (starts with one empty code cell)
 nb create analysis.ipynb
+
+# Add cells
 nb cell add analysis.ipynb --source "import pandas as pd"
 nb cell add analysis.ipynb --source "# Analysis" --type markdown
 nb read analysis.ipynb
@@ -130,7 +132,7 @@ nb read analysis.ipynb --limit 8000 --output-dir ./outputs
 Local mode lets you create, edit, execute, and query notebooks on disk without any server running. All changes are written directly to the `.ipynb` file.
 
 ```bash
-# Create and edit
+# Create and edit (creates notebook with single code cell)
 nb create notebook.ipynb
 nb cell add notebook.ipynb --source "x = 1 + 1"
 nb cell update notebook.ipynb --cell-index 0 --source "x = 2 + 2"
@@ -226,7 +228,7 @@ nb disconnect
 
 | Command | Purpose |
 |---------|---------|
-| `nb create <path>` | Create a new notebook |
+| `nb create <path>` | Create a new notebook with a single code cell |
 | `nb read <path>` | Read notebook cells and metadata |
 | `nb execute <path>` | Execute cells in notebook |
 | `nb search <path> <pattern>` | Search text and errors in notebook cells |
@@ -302,7 +304,7 @@ nb cell update notebook.ipynb --cell 0 \
 
 **Build notebook programmatically:**
 ```bash
-nb create analysis.ipynb --template basic
+nb create analysis.ipynb
 nb cell add analysis.ipynb --source "import pandas as pd"
 nb cell add analysis.ipynb --source "# Analysis" --type markdown
 nb execute analysis.ipynb

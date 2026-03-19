@@ -47,12 +47,11 @@ nb cell add notebook.ipynb --source "print('hello')"
 ## Create Notebook
 
 ```bash
-# Create empty notebook
+# Create notebook with single empty code cell (default)
 nb create notebook.ipynb
 
-# Create with template
-nb create notebook.ipynb --template basic
-nb create notebook.ipynb --template markdown
+# Create notebook with single empty markdown cell
+nb create notebook.ipynb --markdown
 
 # Create with specific kernel
 nb create notebook.ipynb --kernel python3 --language python
