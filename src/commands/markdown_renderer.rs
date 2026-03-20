@@ -2,6 +2,7 @@ use crate::commands::common::{
     self, is_binary_mime_type, AI_NOTEBOOK_FORMAT,
 };
 use anyhow::{Context, Result};
+use base64::Engine;
 use jupyter_protocol::media::Media;
 use nbformat::v4::{Cell, Notebook, Output};
 use serde_json::json;
@@ -9,9 +10,34 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// A cell paired with its original index in the notebook.
+/// Used to preserve correct indices when rendering filtered subsets of cells.
+pub struct IndexedCell<'a> {
+    pub index: usize,
+    pub cell: &'a Cell,
+}
+
 /// Main entry point for rendering a notebook in AI-Optimized Markdown format
 pub fn render_notebook_markdown(
     notebook: &Notebook,
+    include_outputs: bool,
+    output_dir: Option<&Path>,
+    inline_limit: usize,
+) -> Result<String> {
+    let indexed_cells: Vec<IndexedCell> = notebook
+        .cells
+        .iter()
+        .enumerate()
+        .map(|(i, cell)| IndexedCell { index: i, cell })
+        .collect();
+    render_indexed_cells_markdown(notebook, &indexed_cells, include_outputs, output_dir, inline_limit)
+}
+
+/// Render a subset of cells with their original indices preserved.
+/// This is the core rendering function used by both full-notebook and filtered views.
+pub fn render_indexed_cells_markdown(
+    notebook: &Notebook,
+    cells: &[IndexedCell],
     include_outputs: bool,
     output_dir: Option<&Path>,
     inline_limit: usize,
@@ -25,13 +51,12 @@ pub fn render_notebook_markdown(
     // Extract language from kernelspec
     let language = extract_language(notebook);
 
-    // Render each cell with index
-    for (index, cell) in notebook.cells.iter().enumerate() {
-        if index > 0 {
-            // Add blank line before each cell (except first)
+    // Render each cell with its original index
+    for (i, indexed) in cells.iter().enumerate() {
+        if i > 0 {
             result.push('\n');
         }
-        result.push_str(&render_cell(cell, &language, include_outputs, output_dir, inline_limit, index)?);
+        result.push_str(&render_cell(indexed.cell, &language, include_outputs, output_dir, inline_limit, indexed.index)?);
         result.push('\n');
     }
 
@@ -52,7 +77,6 @@ fn render_notebook_header(notebook: &Notebook) -> Result<String> {
 
     // Build the header JSON
     let header = if metadata_obj.as_object().unwrap().is_empty() {
-        // No metadata, just format
         json!({
             "format": AI_NOTEBOOK_FORMAT,
         })
@@ -80,18 +104,10 @@ fn render_cell(
     // Get cell ID - use empty string if missing
     let cell_id = get_cell_id_or_empty(cell);
 
-    // Render cell header
+    // Render cell header and body
     match cell {
         Cell::Markdown { metadata, .. } => {
-            result.push_str(&render_cell_header(
-                cell,
-                "markdown",
-                None,
-                &cell_id,
-                None,
-                metadata,
-                index,
-            )?);
+            result.push_str(&render_cell_header("markdown", &cell_id, None, metadata, index)?);
             result.push('\n');
             result.push_str(&render_cell_body(cell, language)?);
         }
@@ -101,15 +117,7 @@ fn render_cell(
             outputs,
             ..
         } => {
-            result.push_str(&render_cell_header(
-                cell,
-                "code",
-                Some(language),
-                &cell_id,
-                *execution_count,
-                metadata,
-                index,
-            )?);
+            result.push_str(&render_cell_header("code", &cell_id, *execution_count, metadata, index)?);
             result.push('\n');
             result.push_str(&render_cell_body(cell, language)?);
 
@@ -120,15 +128,7 @@ fn render_cell(
             }
         }
         Cell::Raw { metadata, .. } => {
-            result.push_str(&render_cell_header(
-                cell,
-                "raw",
-                None,
-                &cell_id,
-                None,
-                metadata,
-                index,
-            )?);
+            result.push_str(&render_cell_header("raw", &cell_id, None, metadata, index)?);
             result.push('\n');
             result.push_str(&render_cell_body(cell, language)?);
         }
@@ -139,17 +139,13 @@ fn render_cell(
 
 /// Render cell header with JSON metadata
 fn render_cell_header(
-    _cell: &Cell,
     cell_type: &str,
-    _lang: Option<&str>,
     id: &str,
     execution_count: Option<i32>,
     metadata: &nbformat::v4::CellMetadata,
     index: usize,
 ) -> Result<String> {
     // Build JSON with canonical key order: index, id, cell_type, execution_count, metadata
-    // Note: Using nbformat v4.5 schema property names where applicable
-    // "index" is an extension for the markdown format to track cell position
     let mut json_obj = serde_json::Map::new();
 
     json_obj.insert("index".to_string(), json!(index));
@@ -198,13 +194,110 @@ fn render_outputs(outputs: &[Output], output_dir: Option<&Path>, inline_limit: u
 
     for (i, output) in outputs.iter().enumerate() {
         if i > 0 {
-            // Add blank line before each output (except first)
             result.push_str("\n\n");
         }
         result.push_str(&render_output(output, output_dir, inline_limit)?);
     }
 
     Ok(result)
+}
+
+/// Structured output header metadata, replacing the 8-parameter function.
+struct OutputHeaderBuilder {
+    output_type: String,
+    name: Option<String>,
+    mime: Option<String>,
+    execution_count: Option<u32>,
+    ename: Option<String>,
+    evalue: Option<String>,
+    path: Option<PathBuf>,
+    metadata: serde_json::Value,
+}
+
+impl OutputHeaderBuilder {
+    fn new(output_type: &str) -> Self {
+        Self {
+            output_type: output_type.to_string(),
+            name: None,
+            mime: None,
+            execution_count: None,
+            ename: None,
+            evalue: None,
+            path: None,
+            metadata: json!({}),
+        }
+    }
+
+    fn name(mut self, name: &str) -> Self {
+        self.name = Some(name.to_string());
+        self
+    }
+
+    fn mime(mut self, mime: &str) -> Self {
+        self.mime = Some(mime.to_string());
+        self
+    }
+
+    fn execution_count(mut self, count: u32) -> Self {
+        self.execution_count = Some(count);
+        self
+    }
+
+    fn error(mut self, ename: &str, evalue: &str) -> Self {
+        self.ename = Some(ename.to_string());
+        self.evalue = Some(evalue.to_string());
+        self
+    }
+
+    fn path(mut self, path: PathBuf) -> Self {
+        self.path = Some(path);
+        self
+    }
+
+    fn metadata(mut self, metadata: serde_json::Value) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    fn build(self) -> String {
+        let mut json_obj = serde_json::Map::new();
+
+        json_obj.insert("output_type".to_string(), json!(self.output_type));
+
+        if let Some(n) = self.name {
+            json_obj.insert("name".to_string(), json!(n));
+        }
+
+        if let Some(m) = self.mime {
+            json_obj.insert("mime".to_string(), json!(m));
+        }
+
+        if let Some(count) = self.execution_count {
+            json_obj.insert("execution_count".to_string(), json!(count));
+        }
+
+        if let Some(e) = self.ename {
+            json_obj.insert("ename".to_string(), json!(e));
+        }
+
+        if let Some(e) = self.evalue {
+            json_obj.insert("evalue".to_string(), json!(e));
+        }
+
+        if let Some(p) = self.path {
+            json_obj.insert("path".to_string(), json!(p.to_string_lossy()));
+        }
+
+        // Include metadata only if it has meaningful content
+        if let Some(obj) = self.metadata.as_object() {
+            if !obj.is_empty() {
+                json_obj.insert("metadata".to_string(), self.metadata);
+            }
+        }
+
+        let json_str = serde_json::to_string(&json_obj).unwrap_or_default();
+        format!("@@output {}", json_str)
+    }
 }
 
 /// Render a single output
@@ -214,50 +307,23 @@ fn render_output(output: &Output, output_dir: Option<&Path>, inline_limit: usize
             let text_str = text.0.clone();
 
             if text_str.len() > inline_limit {
-                // Externalize large output
                 if let Some(dir) = output_dir {
                     let path = externalize_output(text_str.as_bytes(), "text/plain", dir)?;
-                    Ok(render_output_header(
-                        "stream",
-                        Some(name),
-                        None,
-                        None,
-                        None,
-                        None,
-                        Some(&path),
-                        &json!({}),
-                    ))
+                    Ok(OutputHeaderBuilder::new("stream")
+                        .name(name)
+                        .path(path)
+                        .build())
                 } else {
-                    // No output dir provided, inline it anyway
                     Ok(format!(
                         "{}\n{}",
-                        render_output_header(
-                            "stream",
-                            Some(name),
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
-                            &json!({})
-                        ),
+                        OutputHeaderBuilder::new("stream").name(name).build(),
                         render_inline_text_output(&text_str, "text/plain")
                     ))
                 }
             } else {
-                // Inline output
                 Ok(format!(
                     "{}\n{}",
-                    render_output_header(
-                        "stream",
-                        Some(name),
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        &json!({})
-                    ),
+                    OutputHeaderBuilder::new("stream").name(name).build(),
                     render_inline_text_output(&text_str, "text/plain")
                 ))
             }
@@ -269,28 +335,21 @@ fn render_output(output: &Output, output_dir: Option<&Path>, inline_limit: usize
                 &result.data,
                 Some(result.execution_count.0 as u32),
                 output_dir,
-                &metadata_value,
+                metadata_value,
                 inline_limit,
             )
         }
         Output::DisplayData(data) => {
             let metadata_value = serde_json::to_value(&data.metadata)?;
-            render_output_data("display_data", &data.data, None, output_dir, &metadata_value, inline_limit)
+            render_output_data("display_data", &data.data, None, output_dir, metadata_value, inline_limit)
         }
         Output::Error(error) => {
             let traceback = error.traceback.join("\n");
             Ok(format!(
                 "{}\n{}",
-                render_output_header(
-                    "error",
-                    None,
-                    None,
-                    None,
-                    Some(&error.ename),
-                    Some(&error.evalue),
-                    None,
-                    &json!({})
-                ),
+                OutputHeaderBuilder::new("error")
+                    .error(&error.ename, &error.evalue)
+                    .build(),
                 render_inline_text_output(&traceback, "text/plain")
             ))
         }
@@ -303,7 +362,7 @@ fn render_output_data(
     data: &Media,
     execution_count: Option<u32>,
     output_dir: Option<&Path>,
-    metadata: &serde_json::Value,
+    metadata: serde_json::Value,
     inline_limit: usize,
 ) -> Result<String> {
     // Convert Media to JSON to access mime types
@@ -313,35 +372,25 @@ fn render_output_data(
         .context("Media data is not an object")?;
 
     // MIME type priority matching JupyterLab's renderMimeRegistry
-    // See: https://github.com/jupyterlab/jupyterlab/blob/master/packages/rendermime/src/registry.ts
     let mime_priority = [
-        // Jupyter-specific widgets and interactive outputs
         "application/vnd.jupyter.widget-view+json",
         "application/vnd.jupyter.widget-state+json",
-        // Rich HTML output (interactive, styled)
         "text/html",
-        // Formatted text with structure
         "text/markdown",
-        // Vector graphics (scales without loss)
         "image/svg+xml",
-        // LaTeX math
         "text/latex",
-        // Images (raster)
         "image/png",
         "image/jpeg",
         "image/gif",
-        // JavaScript (executable code)
         "application/javascript",
-        // Structured data
         "application/json",
-        // Fallback to plain text
         "text/plain",
     ];
 
     let mut selected_mime: Option<&String> = None;
     for mime in &mime_priority {
-        if data_obj.contains_key(*mime) {
-            selected_mime = data_obj.keys().find(|k| k.as_str() == *mime);
+        if let Some(key) = data_obj.keys().find(|k| k.as_str() == *mime) {
+            selected_mime = Some(key);
             break;
         }
     }
@@ -358,7 +407,6 @@ fn render_output_data(
     let text_content = match content {
         serde_json::Value::String(s) => s.clone(),
         serde_json::Value::Array(arr) => {
-            // Join array of strings
             arr.iter()
                 .filter_map(|v| v.as_str())
                 .collect::<Vec<_>>()
@@ -367,142 +415,39 @@ fn render_output_data(
         _ => serde_json::to_string(content)?,
     };
 
+    // Build the base header
+    let make_header = |path: Option<PathBuf>| {
+        let mut builder = OutputHeaderBuilder::new(output_type).mime(mime).metadata(metadata.clone());
+        if let Some(count) = execution_count {
+            builder = builder.execution_count(count);
+        }
+        if let Some(p) = path {
+            builder = builder.path(p);
+        }
+        builder.build()
+    };
+
     // Check if binary or needs externalization
     if is_binary_mime_type(mime) {
-        // Binary output - always externalize
         if let Some(dir) = output_dir {
-            // Decode base64 for all binary types (images, audio, video, PDF)
-            // Binary data in Jupyter notebooks is typically base64 encoded
-            let bytes = base64_decode(&text_content)?;
-
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(text_content.as_bytes())
+                .context("Failed to decode base64 binary output")?;
             let path = externalize_output(&bytes, mime, dir)?;
-            Ok(render_output_header(
-                output_type,
-                None,
-                Some(mime),
-                execution_count,
-                None,
-                None,
-                Some(&path),
-                metadata,
-            ))
+            Ok(make_header(Some(path)))
         } else {
-            // No output dir, can't externalize binary
-            Ok(render_output_header(
-                output_type,
-                None,
-                Some(mime),
-                execution_count,
-                None,
-                None,
-                None,
-                metadata,
-            ))
+            Ok(make_header(None))
         }
     } else if text_content.len() > inline_limit {
-        // Large text output - externalize
         if let Some(dir) = output_dir {
             let path = externalize_output(text_content.as_bytes(), mime, dir)?;
-            Ok(render_output_header(
-                output_type,
-                None,
-                Some(mime),
-                execution_count,
-                None,
-                None,
-                Some(&path),
-                metadata,
-            ))
+            Ok(make_header(Some(path)))
         } else {
-            // No output dir, inline anyway
-            Ok(format!(
-                "{}\n{}",
-                render_output_header(
-                    output_type,
-                    None,
-                    Some(mime),
-                    execution_count,
-                    None,
-                    None,
-                    None,
-                    metadata
-                ),
-                render_inline_text_output(&text_content, mime)
-            ))
+            Ok(format!("{}\n{}", make_header(None), render_inline_text_output(&text_content, mime)))
         }
     } else {
-        // Inline text output
-        Ok(format!(
-            "{}\n{}",
-            render_output_header(
-                output_type,
-                None,
-                Some(mime),
-                execution_count,
-                None,
-                None,
-                None,
-                metadata
-            ),
-            render_inline_text_output(&text_content, mime)
-        ))
+        Ok(format!("{}\n{}", make_header(None), render_inline_text_output(&text_content, mime)))
     }
-}
-
-/// Render output header with JSON metadata
-fn render_output_header(
-    output_type: &str,
-    name: Option<&str>,
-    mime: Option<&str>,
-    execution_count: Option<u32>,
-    ename: Option<&str>,
-    evalue: Option<&str>,
-    path: Option<&PathBuf>,
-    metadata: &serde_json::Value,
-) -> String {
-    // Build JSON with canonical key order
-    // Note: Using nbformat v4.5 schema property names where applicable
-    // Additional fields (mime, path) are extensions for the markdown format
-    let mut json_obj = serde_json::Map::new();
-
-    json_obj.insert("output_type".to_string(), json!(output_type));
-
-    if let Some(n) = name {
-        json_obj.insert("name".to_string(), json!(n));
-    }
-
-    if let Some(m) = mime {
-        // Note: mime is a markdown format extension for simplicity
-        // In nbformat, this would be in the data mimebundle
-        json_obj.insert("mime".to_string(), json!(m));
-    }
-
-    if let Some(count) = execution_count {
-        json_obj.insert("execution_count".to_string(), json!(count));
-    }
-
-    if let Some(e) = ename {
-        json_obj.insert("ename".to_string(), json!(e));
-    }
-
-    if let Some(e) = evalue {
-        json_obj.insert("evalue".to_string(), json!(e));
-    }
-
-    if let Some(p) = path {
-        // Convert to absolute path string
-        json_obj.insert("path".to_string(), json!(p.to_string_lossy()));
-    }
-
-    // Include metadata only if it has meaningful content
-    if let Some(obj) = metadata.as_object() {
-        if !obj.is_empty() {
-            json_obj.insert("metadata".to_string(), metadata.clone());
-        }
-    }
-
-    let json_str = serde_json::to_string(&json_obj).unwrap_or_default();
-    format!("@@output {}", json_str)
 }
 
 /// Render inline text output wrapped in fenced code block
@@ -511,10 +456,9 @@ fn render_inline_text_output(text: &str, mime: &str) -> String {
     format!("```{}\n{}\n```", fence_lang, text)
 }
 
-/// Externalize output to a file, returns the absolute file path
-/// Uses content-based hashing to ensure unique filenames and prevent stale data issues
+/// Externalize output to a file, returns the absolute file path.
+/// Uses content-based hashing to ensure unique filenames and prevent stale data issues.
 fn externalize_output(content: &[u8], mime: &str, output_dir: &Path) -> Result<PathBuf> {
-    // Create output directory if it doesn't exist
     fs::create_dir_all(output_dir)?;
 
     // Compute SHA256 hash of content
@@ -526,35 +470,7 @@ fn externalize_output(content: &[u8], mime: &str, output_dir: &Path) -> Result<P
     // Use first 16 characters of hash for filename (64 bits, enough to avoid collisions)
     let hash_prefix = &hash_hex[..16];
 
-    // Determine file extension from mime type
-    let ext = match mime {
-        "text/plain" => "txt",
-        "text/html" => "html",
-        "text/markdown" => "md",
-        "application/json" => "json",
-        "text/latex" | "text/x-latex" | "application/x-latex" => "tex",
-        "text/css" => "css",
-        "application/javascript" | "text/javascript" => "js",
-        "application/xml" | "text/xml" => "xml",
-        "image/png" => "png",
-        "image/jpeg" | "image/jpg" => "jpg",
-        "image/svg+xml" => "svg",
-        "image/gif" => "gif",
-        "image/webp" => "webp",
-        "image/bmp" => "bmp",
-        "image/tiff" => "tiff",
-        "application/pdf" => "pdf",
-        "video/mp4" => "mp4",
-        "video/webm" => "webm",
-        "audio/mpeg" => "mp3",
-        "audio/wav" => "wav",
-        "audio/ogg" => "ogg",
-        _ => "txt",
-    };
-
-    // File naming pattern: <hash>.<ext>
-    // This ensures same content = same filename (deduplication)
-    // and prevents agents from guessing filenames based on cell IDs
+    let ext = mime_to_extension(mime);
     let filename = format!("{}.{}", hash_prefix, ext);
     let path = output_dir.join(&filename);
 
@@ -563,7 +479,6 @@ fn externalize_output(content: &[u8], mime: &str, output_dir: &Path) -> Result<P
         fs::write(&path, content)?;
     }
 
-    // Return absolute path
     let absolute_path = fs::canonicalize(&path)
         .context("Failed to get absolute path for externalized output")?;
 
@@ -583,11 +498,8 @@ fn extract_language(notebook: &Notebook) -> String {
 }
 
 /// Get cell ID or return empty string if missing
-/// We don't generate fake IDs because agents might try to read cells by that ID later
 fn get_cell_id_or_empty(cell: &Cell) -> String {
     let id_str = cell.id().as_str();
-
-    // If ID is empty or whitespace-only, return empty string
     if id_str.trim().is_empty() {
         String::new()
     } else {
@@ -618,74 +530,52 @@ fn get_fence_language(mime: &str) -> &str {
     }
 }
 
-/// Decode base64 string to bytes
-fn base64_decode(s: &str) -> Result<Vec<u8>> {
-    // Simple base64 decoding - handle standard base64
-    // Remove whitespace
-    let cleaned: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-
-    // Use base64 decoding (we'll need to add base64 crate or use a simple implementation)
-    // For now, let's use a basic implementation
-    base64_decode_simple(&cleaned)
+/// Map MIME type to file extension
+fn mime_to_extension(mime: &str) -> &str {
+    match mime {
+        "text/plain" => "txt",
+        "text/html" => "html",
+        "text/markdown" => "md",
+        "application/json" => "json",
+        "text/latex" | "text/x-latex" | "application/x-latex" => "tex",
+        "text/css" => "css",
+        "application/javascript" | "text/javascript" => "js",
+        "application/xml" | "text/xml" => "xml",
+        "image/png" => "png",
+        "image/jpeg" | "image/jpg" => "jpg",
+        "image/svg+xml" => "svg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/bmp" => "bmp",
+        "image/tiff" => "tiff",
+        "application/pdf" => "pdf",
+        "video/mp4" => "mp4",
+        "video/webm" => "webm",
+        "audio/mpeg" => "mp3",
+        "audio/wav" => "wav",
+        "audio/ogg" => "ogg",
+        _ => "txt",
+    }
 }
 
-/// Simple base64 decoder
-fn base64_decode_simple(encoded: &str) -> Result<Vec<u8>> {
-    const DECODE_TABLE: [u8; 256] = [
-        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 62, 255, 255, 255, 63,
-        52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 255, 255, 255, 0, 255, 255,
-        255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-        15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 255, 255, 255, 255, 255,
-        255, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
-        41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 255, 255, 255, 255, 255,
-        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-    ];
+/// Compute the output directory for a notebook.
+/// Creates a deterministic path: `<temp>/nb-cli/<notebook-stem>/`
+pub fn notebook_output_dir(notebook_path: &str) -> PathBuf {
+    let stem = Path::new(notebook_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("notebook");
+    std::env::temp_dir().join("nb-cli").join(stem)
+}
 
-    let bytes = encoded.as_bytes();
-    let mut result = Vec::new();
-    let mut i = 0;
-
-    while i < bytes.len() {
-        let mut buf = [0u8; 4];
-        let mut buf_len = 0;
-
-        // Read up to 4 valid base64 characters
-        while buf_len < 4 && i < bytes.len() {
-            let c = bytes[i];
-            i += 1;
-
-            if c == b'=' {
-                break;
-            }
-
-            let decoded = DECODE_TABLE[c as usize];
-            if decoded != 255 {
-                buf[buf_len] = decoded;
-                buf_len += 1;
-            }
-        }
-
-        if buf_len >= 2 {
-            result.push((buf[0] << 2) | (buf[1] >> 4));
-        }
-        if buf_len >= 3 {
-            result.push((buf[1] << 4) | (buf[2] >> 2));
-        }
-        if buf_len >= 4 {
-            result.push((buf[2] << 6) | buf[3]);
-        }
+/// Remove all nb-cli output directories from the temp dir
+pub fn clean_output_dirs() -> Result<()> {
+    let nb_cli_dir = std::env::temp_dir().join("nb-cli");
+    if nb_cli_dir.exists() {
+        fs::remove_dir_all(&nb_cli_dir)
+            .context("Failed to remove nb-cli output directory")?;
     }
-
-    Ok(result)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -716,7 +606,6 @@ mod tests {
         use nbformat::v4::{Cell, CellId, CellMetadata};
         use std::collections::HashMap;
 
-        // Test with valid ID
         let cell_with_id = Cell::Code {
             id: CellId::new("test-id").unwrap(),
             metadata: CellMetadata {
@@ -737,8 +626,42 @@ mod tests {
             outputs: vec![],
         };
         assert_eq!(get_cell_id_or_empty(&cell_with_id), "test-id");
+    }
 
-        // Note: Cannot easily test empty ID case as CellId::new("") would fail
-        // The get_cell_id_or_empty function handles this at runtime by returning empty string
+    #[test]
+    fn test_mime_to_extension() {
+        assert_eq!(mime_to_extension("image/png"), "png");
+        assert_eq!(mime_to_extension("text/html"), "html");
+        assert_eq!(mime_to_extension("application/pdf"), "pdf");
+        assert_eq!(mime_to_extension("unknown/type"), "txt");
+    }
+
+    #[test]
+    fn test_notebook_output_dir() {
+        let dir = notebook_output_dir("/path/to/my_notebook.ipynb");
+        assert!(dir.ends_with("nb-cli/my_notebook"));
+    }
+
+    #[test]
+    fn test_output_header_builder() {
+        let header = OutputHeaderBuilder::new("stream")
+            .name("stdout")
+            .build();
+        assert!(header.starts_with("@@output "));
+        let json_str = &header["@@output ".len()..];
+        let json: serde_json::Value = serde_json::from_str(json_str).unwrap();
+        assert_eq!(json["output_type"], "stream");
+        assert_eq!(json["name"], "stdout");
+    }
+
+    #[test]
+    fn test_output_header_builder_with_error() {
+        let header = OutputHeaderBuilder::new("error")
+            .error("ValueError", "invalid value")
+            .build();
+        let json_str = &header["@@output ".len()..];
+        let json: serde_json::Value = serde_json::from_str(json_str).unwrap();
+        assert_eq!(json["ename"], "ValueError");
+        assert_eq!(json["evalue"], "invalid value");
     }
 }

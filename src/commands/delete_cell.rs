@@ -138,7 +138,7 @@ async fn execute_with_realtime(
     let format = if args.json {
         OutputFormat::Json
     } else {
-        OutputFormat::Markdown
+        OutputFormat::Text
     };
     output_result(&result, &format)?;
 
@@ -203,7 +203,7 @@ fn execute_file_based(args: DeleteCellArgs) -> Result<()> {
     let format = if args.json {
         OutputFormat::Json
     } else {
-        OutputFormat::Markdown
+        OutputFormat::Text
     };
     output_result(&result, &format)?;
 
@@ -273,7 +273,7 @@ fn output_result(result: &DeleteCellResult, format: &OutputFormat) -> Result<()>
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
-        OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Markdown => {
             println!(
                 "Deleted {} cell(s) from: {}",
                 result.cells_deleted, result.file

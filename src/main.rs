@@ -65,6 +65,8 @@ enum CellCommands {
 enum OutputCommands {
     /// Clear outputs from code cells
     Clear(commands::clear_outputs::ClearOutputsArgs),
+    /// Remove all externalized output files from the temp directory
+    Clean(commands::clean_output_dirs::CleanOutputDirsArgs),
 }
 
 fn main() {
@@ -83,6 +85,7 @@ fn main() {
         },
         Commands::Output { command } => match command {
             OutputCommands::Clear(args) => commands::clear_outputs::execute(args),
+            OutputCommands::Clean(args) => commands::clean_output_dirs::execute(args),
         },
         Commands::Connect(args) => commands::connect::execute(args),
         Commands::Status(args) => commands::status::execute(args),

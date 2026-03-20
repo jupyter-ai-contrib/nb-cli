@@ -1,5 +1,5 @@
 use crate::commands::common::{self, OutputFormat};
-use crate::commands::markdown_renderer;
+use crate::commands::markdown_renderer::{self, IndexedCell};
 use crate::notebook;
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -59,27 +59,17 @@ pub fn execute(args: ReadArgs) -> Result<()> {
         OutputFormat::Markdown
     };
 
-    // Determine output inclusion
     // Default: include outputs, unless --no-output is specified
-    let include_outputs = if args.no_output {
-        false
-    } else if args.with_outputs {
-        true
-    } else {
-        // Default: show outputs
-        true
-    };
+    let include_outputs = !args.no_output;
 
     // Setup output directory for markdown format
     let output_dir = if matches!(format, OutputFormat::Markdown) && include_outputs {
         if let Some(dir) = &args.output_dir {
             Some(PathBuf::from(dir))
         } else {
-            // Create temp directory
-            let temp_dir = tempfile::tempdir()?;
-            let path = temp_dir.path().to_path_buf();
-            let _ = temp_dir.keep();
-            Some(path)
+            let dir = markdown_renderer::notebook_output_dir(&args.file);
+            std::fs::create_dir_all(&dir)?;
+            Some(dir)
         }
     } else {
         None
@@ -88,7 +78,7 @@ pub fn execute(args: ReadArgs) -> Result<()> {
     // Handle specific cell by ID
     if let Some(ref cell_id) = args.cell {
         let (index, cell) = common::find_cell_by_id(&notebook.cells, cell_id)?;
-        output_cell_with_optional_output(cell, index, &format, include_outputs, output_dir.as_deref(), args.limit)?;
+        output_cell_with_optional_output(cell, index, &notebook, &format, include_outputs, output_dir.as_deref(), args.limit)?;
         return Ok(());
     }
 
@@ -101,19 +91,23 @@ pub fn execute(args: ReadArgs) -> Result<()> {
             notebook.cells.len()
         ))?;
 
-        output_cell_with_optional_output(&cell, index, &format, include_outputs, output_dir.as_deref(), args.limit)?;
+        output_cell_with_optional_output(cell, index, &notebook, &format, include_outputs, output_dir.as_deref(), args.limit)?;
         return Ok(());
     }
 
     // Handle --only-code flag
     if args.only_code {
-        output_code_cells(&notebook.cells, &format, include_outputs, output_dir.as_deref(), args.limit)?;
+        output_filtered_cells(&notebook, &format, include_outputs, output_dir.as_deref(), args.limit, |cell| {
+            matches!(cell, Cell::Code { .. })
+        })?;
         return Ok(());
     }
 
     // Handle --only-markdown flag
     if args.only_markdown {
-        output_markdown_cells(&notebook.cells, &format, args.limit)?;
+        output_filtered_cells(&notebook, &format, false, None, args.limit, |cell| {
+            matches!(cell, Cell::Markdown { .. })
+        })?;
         return Ok(());
     }
 
@@ -125,23 +119,18 @@ pub fn execute(args: ReadArgs) -> Result<()> {
 fn output_cell_with_optional_output(
     cell: &Cell,
     index: usize,
+    notebook: &nbformat::v4::Notebook,
     format: &OutputFormat,
     with_outputs: bool,
     output_dir: Option<&std::path::Path>,
     inline_limit: usize,
 ) -> Result<()> {
     match format {
-        OutputFormat::Markdown => {
-            // Create a temporary notebook with just this cell
-            let temp_notebook = nbformat::v4::Notebook {
-                cells: vec![cell.clone()],
-                metadata: nbformat::v4::Metadata::default(),
-                nbformat: 4,
-                nbformat_minor: 5,
-            };
-
-            let markdown = markdown_renderer::render_notebook_markdown(
-                &temp_notebook,
+        OutputFormat::Markdown | OutputFormat::Text => {
+            let indexed = [IndexedCell { index, cell }];
+            let markdown = markdown_renderer::render_indexed_cells_markdown(
+                notebook,
+                &indexed,
                 with_outputs,
                 output_dir,
                 inline_limit,
@@ -170,29 +159,27 @@ fn output_cell_with_optional_output(
     Ok(())
 }
 
-fn output_code_cells(
-    cells: &[Cell],
+fn output_filtered_cells(
+    notebook: &nbformat::v4::Notebook,
     format: &OutputFormat,
     with_outputs: bool,
     output_dir: Option<&std::path::Path>,
     inline_limit: usize,
+    filter: impl Fn(&Cell) -> bool,
 ) -> Result<()> {
     match format {
-        OutputFormat::Markdown => {
-            // Create a temporary notebook with just code cells
-            let temp_notebook = nbformat::v4::Notebook {
-                cells: cells
-                    .iter()
-                    .filter(|cell| matches!(cell, Cell::Code { .. }))
-                    .cloned()
-                    .collect(),
-                metadata: nbformat::v4::Metadata::default(),
-                nbformat: 4,
-                nbformat_minor: 5,
-            };
+        OutputFormat::Markdown | OutputFormat::Text => {
+            let indexed: Vec<IndexedCell> = notebook
+                .cells
+                .iter()
+                .enumerate()
+                .filter(|(_, cell)| filter(cell))
+                .map(|(i, cell)| IndexedCell { index: i, cell })
+                .collect();
 
-            let markdown = markdown_renderer::render_notebook_markdown(
-                &temp_notebook,
+            let markdown = markdown_renderer::render_indexed_cells_markdown(
+                notebook,
+                &indexed,
                 with_outputs,
                 output_dir,
                 inline_limit,
@@ -200,80 +187,25 @@ fn output_code_cells(
             print!("{}", markdown);
         }
         OutputFormat::Json => {
-            let code_cells: Vec<serde_json::Value> = cells
+            let filtered: Vec<serde_json::Value> = notebook
+                .cells
                 .iter()
                 .enumerate()
+                .filter(|(_, cell)| filter(cell))
                 .filter_map(|(index, cell)| {
-                    if let Cell::Code { .. } = cell {
-                        let mut cell_json = serde_json::to_value(cell).ok()?;
+                    let mut cell_json = serde_json::to_value(cell).ok()?;
 
-                        // Add index as convenience field
-                        if let Some(obj) = cell_json.as_object_mut() {
-                            obj.insert("index".to_string(), json!(index));
-
-                            // Remove outputs if not requested
-                            if !with_outputs {
-                                obj.remove("outputs");
-                            }
+                    if let Some(obj) = cell_json.as_object_mut() {
+                        obj.insert("index".to_string(), json!(index));
+                        if !with_outputs {
+                            obj.remove("outputs");
                         }
-
-                        Some(cell_json)
-                    } else {
-                        None
                     }
+
+                    Some(cell_json)
                 })
                 .collect();
-            let output = json!({ "cells": code_cells });
-            println!("{}", serde_json::to_string_pretty(&output)?);
-        }
-    }
-    Ok(())
-}
-
-fn output_markdown_cells(cells: &[Cell], format: &OutputFormat, inline_limit: usize) -> Result<()> {
-    match format {
-        OutputFormat::Markdown => {
-            // Create a temporary notebook with just markdown cells
-            let temp_notebook = nbformat::v4::Notebook {
-                cells: cells
-                    .iter()
-                    .filter(|cell| matches!(cell, Cell::Markdown { .. }))
-                    .cloned()
-                    .collect(),
-                metadata: nbformat::v4::Metadata::default(),
-                nbformat: 4,
-                nbformat_minor: 5,
-            };
-
-            let markdown = markdown_renderer::render_notebook_markdown(
-                &temp_notebook,
-                false, // Markdown cells don't have outputs
-                None,
-                inline_limit,
-            )?;
-            print!("{}", markdown);
-        }
-        OutputFormat::Json => {
-            let markdown_cells: Vec<serde_json::Value> = cells
-                .iter()
-                .enumerate()
-                .filter_map(|(index, cell)| {
-                    if let Cell::Markdown { .. } = cell {
-                        let mut cell_json = serde_json::to_value(cell).ok()?;
-
-                        // Add index as convenience field
-                        if let Some(obj) = cell_json.as_object_mut() {
-                            obj.insert("index".to_string(), json!(index));
-                        }
-
-                        Some(cell_json)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            let output = json!({ "cells": markdown_cells });
+            let output = json!({ "cells": filtered });
             println!("{}", serde_json::to_string_pretty(&output)?);
         }
     }
@@ -290,7 +222,7 @@ fn output_notebook_structure(
     // If with_outputs is true, show full cells with outputs instead of structure
     if with_outputs {
         match format {
-            OutputFormat::Markdown => {
+            OutputFormat::Markdown | OutputFormat::Text => {
                 let markdown =
                     markdown_renderer::render_notebook_markdown(notebook, true, output_dir, inline_limit)?;
                 print!("{}", markdown);
@@ -303,7 +235,6 @@ fn output_notebook_structure(
                     .map(|(index, cell)| {
                         let mut cell_json = serde_json::to_value(cell).unwrap_or(json!(null));
 
-                        // Add index as convenience field
                         if let Some(obj) = cell_json.as_object_mut() {
                             obj.insert("index".to_string(), json!(index));
                         }
@@ -320,8 +251,7 @@ fn output_notebook_structure(
 
     // Default structure view - serialize cells directly with nbformat
     match format {
-        OutputFormat::Markdown => {
-            // For markdown without outputs, just render cells without outputs
+        OutputFormat::Markdown | OutputFormat::Text => {
             let markdown =
                 markdown_renderer::render_notebook_markdown(notebook, false, None, inline_limit)?;
             print!("{}", markdown);
@@ -334,7 +264,6 @@ fn output_notebook_structure(
                 .map(|(index, cell)| {
                     let mut cell_json = serde_json::to_value(cell).unwrap_or(json!(null));
 
-                    // Add index as convenience field and remove outputs
                     if let Some(obj) = cell_json.as_object_mut() {
                         obj.insert("index".to_string(), json!(index));
                         obj.remove("outputs");

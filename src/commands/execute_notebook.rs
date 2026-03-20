@@ -76,7 +76,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     let format = if args.json {
         OutputFormat::Json
     } else {
-        OutputFormat::Markdown
+        OutputFormat::Text
     };
 
     // Read notebook
@@ -202,7 +202,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
                 if !success {
                     failed_count += 1;
 
-                    if matches!(format, OutputFormat::Markdown) {
+                    if !matches!(format, OutputFormat::Json) {
                         eprintln!("  ✗ Cell {} completed with error", code_cell_num);
                         if let Some(error) =
                             execution_results.get(&i).and_then(|r| r.error.as_ref())
@@ -216,7 +216,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
                         backend.stop().await?;
                         anyhow::bail!("Execution stopped at cell {} due to error", i);
                     }
-                } else if matches!(format, OutputFormat::Markdown) {
+                } else if !matches!(format, OutputFormat::Json) {
                     eprintln!("  ✓ Cell {} completed", code_cell_num);
                 }
             }
@@ -311,7 +311,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&output_result)?);
         }
-        OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Markdown => {
             println!("\n{}", "=".repeat(50));
             if output_result.success {
                 println!("✓ Notebook executed successfully");

@@ -77,7 +77,7 @@ pub fn execute(args: ClearOutputsArgs) -> Result<()> {
     let format = if args.json {
         OutputFormat::Json
     } else {
-        OutputFormat::Markdown
+        OutputFormat::Text
     };
     output_result(&result, &format)?;
 
@@ -106,7 +106,7 @@ fn output_result(result: &ClearOutputsResult, format: &OutputFormat) -> Result<(
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
-        OutputFormat::Markdown => {
+        OutputFormat::Text | OutputFormat::Markdown => {
             println!(
                 "Cleared outputs from {} cell(s) in: {}",
                 result.cells_cleared, result.file

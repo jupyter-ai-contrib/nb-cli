@@ -17,7 +17,10 @@ pub enum CellType {
 #[derive(Clone, Debug)]
 pub enum OutputFormat {
     Json,
+    /// AI-Optimized Markdown format (for read/search commands that render notebook content)
     Markdown,
+    /// Plain text format (for mutating commands like add/delete/update/create/clear/execute)
+    Text,
 }
 
 // AI-Optimized Markdown format constants

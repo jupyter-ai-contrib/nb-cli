@@ -27,7 +27,7 @@ Use `--limit` to control externalization threshold and `--output-dir` for extern
 ```bash
 # ALWAYS check --help first if unsure: nb --help, nb cell --help, nb execute --help
 
-# Read entire notebook
+# Read entire notebook - this returns AI friendly markdown
 nb read notebook.ipynb
 
 # Read specific cell (use --cell-index or -i for index, --cell or -c for ID)
@@ -65,6 +65,19 @@ nb create notebook.ipynb --json
 ```
 
 ## Read Notebook
+
+Use `nb read notebook.ipynb` in the default output mode for normal notebook reading tasks.
+
+The default output is the preferred agent format:
+
+- Markdown notebook content
+- Sentinel lines starting with `@@notebook`, `@@cell`, and `@@output`
+- JSON metadata on those sentinel lines for deterministic parsing
+
+This default format should be used for summarization, review, inspection, and understanding notebook
+structure and outputs.
+
+While `nb read --json` is available, only use this when you absolutely need the notebook as JSON. Do not use `--json` merely to make parsing easier.
 
 ```bash
 # Read entire notebook (outputs included by default)
