@@ -241,7 +241,6 @@ fn execute_with_errors(args: &SearchArgs) -> Result<()> {
     match format {
         OutputFormat::Json => print_json(&results, args)?,
         OutputFormat::Markdown => print_text(&results, args)?,
-        OutputFormat::Markdown => print_text(&results, args)?, // TODO: Implement markdown format
     }
 
     Ok(())

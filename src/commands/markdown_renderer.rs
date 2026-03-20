@@ -8,7 +8,6 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
-use uuid::Uuid;
 
 /// Main entry point for rendering a notebook in AI-Optimized Markdown format
 pub fn render_notebook_markdown(

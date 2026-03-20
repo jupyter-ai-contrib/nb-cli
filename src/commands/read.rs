@@ -3,8 +3,7 @@ use crate::commands::markdown_renderer;
 use crate::notebook;
 use anyhow::{Context, Result};
 use clap::Parser;
-use jupyter_protocol::media::Media;
-use nbformat::v4::{Cell, Output};
+use nbformat::v4::Cell;
 use serde_json::json;
 use std::path::PathBuf;
 
@@ -131,9 +130,6 @@ fn output_cell_with_optional_output(
     output_dir: Option<&std::path::Path>,
     inline_limit: usize,
 ) -> Result<()> {
-    let source = common::cell_to_string(cell);
-    let id = common::cell_id_to_string(cell);
-
     match format {
         OutputFormat::Markdown => {
             // Create a temporary notebook with just this cell
@@ -170,96 +166,8 @@ fn output_cell_with_optional_output(
 
             println!("{}", serde_json::to_string_pretty(&cell_json)?);
         }
-        OutputFormat::Markdown => {
-            let cell_type = match cell {
-                Cell::Code { .. } => "Code",
-                Cell::Markdown { .. } => "Markdown",
-                Cell::Raw { .. } => "Raw",
-            };
-            println!("Cell {} [{}] (ID: {})", index, cell_type, id);
-            println!("---");
-            println!("{}", source);
-
-            if let Cell::Code {
-                execution_count,
-                outputs,
-                ..
-            } = cell
-            {
-                if let Some(count) = execution_count {
-                    println!("\nExecution count: {}", count);
-                }
-
-                if with_outputs && !outputs.is_empty() {
-                    println!("\nOutputs:");
-                    println!("---");
-                    for (i, output) in outputs.iter().enumerate() {
-                        if i > 0 {
-                            println!("\n---\n");
-                        }
-                        print_output_text(output);
-                    }
-                }
-            }
-        }
     }
     Ok(())
-}
-
-fn print_output_text(output: &Output) {
-    match output {
-        Output::ExecuteResult(result) => {
-            println!(
-                "Execute Result (execution_count: {:?}):",
-                result.execution_count
-            );
-            print_output_data(&result.data);
-        }
-        Output::DisplayData(data) => {
-            println!("Display Data:");
-            print_output_data(&data.data);
-        }
-        Output::Stream { name, text } => {
-            println!("Stream ({}):", name);
-            print!("{}", text.0);
-        }
-        Output::Error(error) => {
-            println!("Error: {}", error.ename);
-            println!("Message: {}", error.evalue);
-            if !error.traceback.is_empty() {
-                println!("Traceback:");
-                for line in &error.traceback {
-                    println!("  {}", line);
-                }
-            }
-        }
-    }
-}
-
-fn print_output_data(data: &Media) {
-    // Media is an opaque type from jupyter_protocol, we need to serialize it to access
-    if let Ok(json_val) = serde_json::to_value(data) {
-        if let Some(obj) = json_val.as_object() {
-            for (mime_type, content) in obj {
-                println!("  [{}]:", mime_type);
-                match content {
-                    serde_json::Value::String(s) => println!("{}", s),
-                    serde_json::Value::Array(arr) => {
-                        for item in arr {
-                            if let serde_json::Value::String(s) = item {
-                                print!("{}", s);
-                            }
-                        }
-                        println!();
-                    }
-                    _ => println!(
-                        "{}",
-                        serde_json::to_string_pretty(content).unwrap_or_default()
-                    ),
-                }
-            }
-        }
-    }
 }
 
 fn output_code_cells(
@@ -318,38 +226,6 @@ fn output_code_cells(
             let output = json!({ "cells": code_cells });
             println!("{}", serde_json::to_string_pretty(&output)?);
         }
-        OutputFormat::Markdown => {
-            for (index, cell) in cells.iter().enumerate() {
-                if let Cell::Code {
-                    execution_count,
-                    outputs,
-                    ..
-                } = cell
-                {
-                    println!(
-                        "=== Cell {} (ID: {}) ===",
-                        index,
-                        common::cell_id_to_string(cell)
-                    );
-                    if let Some(count) = execution_count {
-                        println!("Execution count: {}", count);
-                    }
-                    println!("{}", common::cell_to_string(cell));
-
-                    if with_outputs && !outputs.is_empty() {
-                        println!("\nOutputs:");
-                        println!("---");
-                        for (i, output) in outputs.iter().enumerate() {
-                            if i > 0 {
-                                println!("\n---\n");
-                            }
-                            print_output_text(output);
-                        }
-                    }
-                    println!();
-                }
-            }
-        }
     }
     Ok(())
 }
@@ -400,19 +276,6 @@ fn output_markdown_cells(cells: &[Cell], format: &OutputFormat, inline_limit: us
             let output = json!({ "cells": markdown_cells });
             println!("{}", serde_json::to_string_pretty(&output)?);
         }
-        OutputFormat::Markdown => {
-            for (index, cell) in cells.iter().enumerate() {
-                if let Cell::Markdown { .. } = cell {
-                    println!(
-                        "=== Cell {} (ID: {}) ===",
-                        index,
-                        common::cell_id_to_string(cell)
-                    );
-                    println!("{}", common::cell_to_string(cell));
-                    println!();
-                }
-            }
-        }
     }
     Ok(())
 }
@@ -450,44 +313,6 @@ fn output_notebook_structure(
                     .collect();
                 let output = json!({ "cells": cells });
                 println!("{}", serde_json::to_string_pretty(&output)?);
-            }
-            OutputFormat::Markdown => {
-                for (index, cell) in notebook.cells.iter().enumerate() {
-                    let cell_type = match cell {
-                        Cell::Code { .. } => "Code",
-                        Cell::Markdown { .. } => "Markdown",
-                        Cell::Raw { .. } => "Raw",
-                    };
-                    println!(
-                        "=== Cell {} [{}] (ID: {}) ===",
-                        index,
-                        cell_type,
-                        common::cell_id_to_string(cell)
-                    );
-                    println!("{}", common::cell_to_string(cell));
-
-                    if let Cell::Code {
-                        execution_count,
-                        outputs,
-                        ..
-                    } = cell
-                    {
-                        if let Some(count) = execution_count {
-                            println!("\nExecution count: {}", count);
-                        }
-                        if !outputs.is_empty() {
-                            println!("\nOutputs:");
-                            println!("---");
-                            for (i, output) in outputs.iter().enumerate() {
-                                if i > 0 {
-                                    println!("\n---\n");
-                                }
-                                print_output_text(output);
-                            }
-                        }
-                    }
-                    println!();
-                }
             }
         }
         return Ok(());
@@ -548,69 +373,6 @@ fn output_notebook_structure(
             });
 
             println!("{}", serde_json::to_string_pretty(&structure)?);
-        }
-        OutputFormat::Markdown => {
-            let mut code_cells = 0;
-            let mut markdown_cells = 0;
-            let mut raw_cells = 0;
-
-            for cell in &notebook.cells {
-                match cell {
-                    Cell::Code { .. } => code_cells += 1,
-                    Cell::Markdown { .. } => markdown_cells += 1,
-                    Cell::Raw { .. } => raw_cells += 1,
-                }
-            }
-
-            let kernel = notebook
-                .metadata
-                .kernelspec
-                .as_ref()
-                .map(|ks| ks.name.clone());
-
-            println!("Notebook Structure");
-            println!("==================");
-            println!("Total cells: {}", notebook.cells.len());
-            println!("Code cells: {}", code_cells);
-            println!("Markdown cells: {}", markdown_cells);
-            if raw_cells > 0 {
-                println!("Raw cells: {}", raw_cells);
-            }
-            if let Some(k) = kernel {
-                println!("Kernel: {}", k);
-            }
-            println!("\nCells:");
-            for (index, cell) in notebook.cells.iter().enumerate() {
-                let source = common::cell_to_string(cell);
-
-                let (cell_type, executed) = match cell {
-                    Cell::Code {
-                        execution_count, ..
-                    } => ("code", Some(execution_count.is_some())),
-                    Cell::Markdown { .. } => ("markdown", None),
-                    Cell::Raw { .. } => ("raw", None),
-                };
-
-                let executed_marker = match executed {
-                    Some(true) => " [✓]",
-                    Some(false) => " [ ]",
-                    None => "",
-                };
-
-                println!(
-                    "  {} [{}]{} (ID: {}):",
-                    index,
-                    cell_type,
-                    executed_marker,
-                    common::cell_id_to_string(cell),
-                );
-
-                // Indent cell content for better readability
-                for line in source.lines() {
-                    println!("    {}", line);
-                }
-                println!();
-            }
         }
     }
     Ok(())

@@ -22,12 +22,6 @@ pub enum OutputFormat {
 
 // AI-Optimized Markdown format constants
 pub const AI_NOTEBOOK_FORMAT: &str = "ai-notebook";
-pub const MAX_INLINE_OUTPUT_CHARS: usize = 4000;
-
-/// Check if output should be inlined or externalized
-pub fn should_externalize_output(text: &str) -> bool {
-    text.len() > MAX_INLINE_OUTPUT_CHARS
-}
 
 /// Check if output is binary (non-text MIME type)
 pub fn is_binary_mime_type(mime: &str) -> bool {
@@ -36,23 +30,6 @@ pub fn is_binary_mime_type(mime: &str) -> bool {
         || mime.starts_with("video/")
         || mime == "application/octet-stream"
         || mime == "application/pdf"
-}
-
-/// Format bytes for display (e.g., "1.2 KB")
-pub fn format_bytes(bytes: usize) -> String {
-    const KB: usize = 1024;
-    const MB: usize = KB * 1024;
-    const GB: usize = MB * 1024;
-
-    if bytes >= GB {
-        format!("{:.1} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.1} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} bytes", bytes)
-    }
 }
 
 /// Normalize a cell index, supporting negative indexing (e.g., -1 for last cell)
