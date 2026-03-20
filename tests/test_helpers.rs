@@ -1,7 +1,76 @@
 /// Helper module for test utilities
+use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
+
+// ==================== AI-OPTIMIZED MARKDOWN PARSING ====================
+
+/// A parsed sentinel line from AI-Optimized Markdown output (@@notebook, @@cell, @@output)
+#[derive(Debug, Clone)]
+pub struct Sentinel {
+    /// Sentinel type: "notebook", "cell", or "output"
+    pub kind: String,
+    /// Parsed JSON metadata following the sentinel marker
+    pub metadata: Value,
+}
+
+impl Sentinel {
+    /// Get a string field from the metadata
+    pub fn get_str(&self, key: &str) -> Option<&str> {
+        self.metadata.get(key)?.as_str()
+    }
+
+    /// Get an integer field from the metadata
+    pub fn get_i64(&self, key: &str) -> Option<i64> {
+        self.metadata.get(key)?.as_i64()
+    }
+}
+
+/// Parse a single line that starts with @@ into a Sentinel
+pub fn parse_sentinel(line: &str) -> Option<Sentinel> {
+    let line = line.trim();
+    if !line.starts_with("@@") {
+        return None;
+    }
+    let rest = &line[2..];
+    let space_idx = rest.find(' ')?;
+    let kind = rest[..space_idx].to_string();
+    let json_str = &rest[space_idx + 1..];
+    let metadata: Value = serde_json::from_str(json_str).ok()?;
+    Some(Sentinel { kind, metadata })
+}
+
+/// Parse all sentinel lines from AI-Optimized Markdown output
+pub fn parse_sentinels(output: &str) -> Vec<Sentinel> {
+    output
+        .lines()
+        .filter_map(parse_sentinel)
+        .collect()
+}
+
+/// Extract only @@cell sentinels from output
+pub fn parse_cells(output: &str) -> Vec<Sentinel> {
+    parse_sentinels(output)
+        .into_iter()
+        .filter(|s| s.kind == "cell")
+        .collect()
+}
+
+/// Extract only @@output sentinels from output
+pub fn parse_outputs(output: &str) -> Vec<Sentinel> {
+    parse_sentinels(output)
+        .into_iter()
+        .filter(|s| s.kind == "output")
+        .collect()
+}
+
+/// Extract the @@notebook sentinel from output
+pub fn parse_notebook_header(output: &str) -> Option<Sentinel> {
+    parse_sentinels(output)
+        .into_iter()
+        .find(|s| s.kind == "notebook")
+}
 
 static VENV_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 

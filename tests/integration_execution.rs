@@ -166,7 +166,20 @@ fn test_execute_cell_with_output() {
         ])
         .assert_success();
 
-    assert!(result.stdout.contains("@@output") && result.stdout.contains("Result: 52"));
+    // Parse the markdown output for deep validation
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0].get_str("cell_type"), Some("code"));
+
+    let outputs = test_helpers::parse_outputs(&result.stdout);
+    assert!(!outputs.is_empty(), "Cell should have outputs after execution");
+    assert!(
+        outputs[0].get_str("output_type").is_some(),
+        "Output should have output_type"
+    );
+
+    // Verify the actual output content
+    assert!(result.stdout.contains("Result: 52"));
 }
 
 #[test]
@@ -235,8 +248,23 @@ fn test_execute_entire_notebook() {
         .run(&["read", nb_path.to_str().unwrap()])
         .assert_success();
 
-    // Check that execution counts were set (shown in @@cell JSON metadata)
-    assert!(read_result.stdout.contains("\"execution_count\""));
+    // Parse cells and verify execution counts were set
+    let cells = test_helpers::parse_cells(&read_result.stdout);
+    assert!(!cells.is_empty(), "Should have cells");
+
+    let code_cells: Vec<_> = cells
+        .iter()
+        .filter(|c| c.get_str("cell_type") == Some("code"))
+        .collect();
+    assert!(!code_cells.is_empty(), "Should have code cells");
+
+    for cell in &code_cells {
+        assert!(
+            cell.get_i64("execution_count").is_some(),
+            "Code cell at index {:?} should have execution_count after full notebook execution",
+            cell.get_i64("index")
+        );
+    }
 }
 
 #[test]

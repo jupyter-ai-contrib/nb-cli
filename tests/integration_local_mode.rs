@@ -1,3 +1,5 @@
+mod test_helpers;
+
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -378,7 +380,7 @@ fn test_read_only_markdown() {
 }
 
 #[test]
-fn test_read_text_format() {
+fn test_read_markdown_format() {
     let env = TestEnv::new();
     let nb_path = env.copy_fixture("with_code.ipynb", "test.ipynb");
 
@@ -386,8 +388,179 @@ fn test_read_text_format() {
         .run(&["read", nb_path.to_str().unwrap()])
         .assert_success();
 
-    assert!(result.stdout.contains("@@cell"));
+    // Verify notebook header
+    let header = test_helpers::parse_notebook_header(&result.stdout)
+        .expect("Should have @@notebook header");
+    assert_eq!(header.get_str("format"), Some("ai-notebook"));
+
+    // Verify cells
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert_eq!(cells.len(), 2);
+
+    // First cell
+    assert_eq!(cells[0].get_str("cell_type"), Some("code"));
+    assert_eq!(cells[0].get_str("id"), Some("cell-1"));
+    assert_eq!(cells[0].get_i64("index"), Some(0));
+
+    // Second cell
+    assert_eq!(cells[1].get_str("cell_type"), Some("code"));
+    assert_eq!(cells[1].get_str("id"), Some("cell-2"));
+    assert_eq!(cells[1].get_i64("index"), Some(1));
+
+    // Verify source content is present
+    assert!(result.stdout.contains("x = 1 + 1"));
     assert!(result.stdout.contains("print"));
+}
+
+#[test]
+fn test_read_markdown_format_with_outputs() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("with_outputs.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["read", nb_path.to_str().unwrap()])
+        .assert_success();
+
+    // Verify notebook header exists
+    let header = test_helpers::parse_notebook_header(&result.stdout)
+        .expect("Should have @@notebook header");
+    assert_eq!(header.get_str("format"), Some("ai-notebook"));
+
+    // Verify cells exist
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert!(!cells.is_empty());
+
+    // Verify outputs are present (outputs included by default)
+    let outputs = test_helpers::parse_outputs(&result.stdout);
+    assert!(!outputs.is_empty(), "Outputs should be included by default");
+
+    // Verify output has expected fields
+    let first_output = &outputs[0];
+    assert!(
+        first_output.get_str("output_type").is_some(),
+        "Output should have output_type"
+    );
+}
+
+#[test]
+fn test_read_markdown_format_no_output() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("with_outputs.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--no-output"])
+        .assert_success();
+
+    // Cells should still be present
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert!(!cells.is_empty());
+
+    // But no outputs
+    let outputs = test_helpers::parse_outputs(&result.stdout);
+    assert!(outputs.is_empty(), "Outputs should be excluded with --no-output");
+}
+
+#[test]
+fn test_read_markdown_format_only_code() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("mixed_cells.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--only-code"])
+        .assert_success();
+
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert_eq!(cells.len(), 2);
+    for cell in &cells {
+        assert_eq!(cell.get_str("cell_type"), Some("code"));
+    }
+}
+
+#[test]
+fn test_read_markdown_format_only_markdown() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("mixed_cells.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--only-markdown"])
+        .assert_success();
+
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert_eq!(cells.len(), 2);
+    for cell in &cells {
+        assert_eq!(cell.get_str("cell_type"), Some("markdown"));
+    }
+}
+
+#[test]
+fn test_read_markdown_format_single_cell() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("with_code.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "0"])
+        .assert_success();
+
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0].get_str("cell_type"), Some("code"));
+    assert_eq!(cells[0].get_str("id"), Some("cell-1"));
+}
+
+#[test]
+fn test_read_markdown_format_cell_by_id() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("with_code.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--cell", "cell-2"])
+        .assert_success();
+
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0].get_str("id"), Some("cell-2"));
+}
+
+#[test]
+fn test_read_markdown_format_empty_notebook() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("empty.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["read", nb_path.to_str().unwrap()])
+        .assert_success();
+
+    // Should have notebook header but no cells
+    let header = test_helpers::parse_notebook_header(&result.stdout)
+        .expect("Should have @@notebook header");
+    assert_eq!(header.get_str("format"), Some("ai-notebook"));
+
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert_eq!(cells.len(), 0);
+}
+
+#[test]
+fn test_search_markdown_format() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("mixed_cells.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["search", nb_path.to_str().unwrap(), "import"])
+        .assert_success();
+
+    // Search results should include notebook header and matching cells
+    let header = test_helpers::parse_notebook_header(&result.stdout)
+        .expect("Search should output @@notebook header");
+    assert_eq!(header.get_str("format"), Some("ai-notebook"));
+
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert!(!cells.is_empty(), "Should find matching cells");
+    for cell in &cells {
+        assert_eq!(cell.get_str("cell_type"), Some("code"));
+    }
+
+    // Should include summary comment
+    assert!(result.stdout.contains("# Found"));
 }
 
 #[test]
