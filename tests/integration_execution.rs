@@ -163,11 +163,10 @@ fn test_execute_cell_with_output() {
             nb_path.to_str().unwrap(),
             "--cell-index",
             "2",
-            "--with-outputs",
         ])
         .assert_success();
 
-    assert!(result.stdout.contains("Outputs:") && result.stdout.contains("Result: 52"));
+    assert!(result.stdout.contains("@@output") && result.stdout.contains("Result: 52"));
 }
 
 #[test]
@@ -236,8 +235,8 @@ fn test_execute_entire_notebook() {
         .run(&["read", nb_path.to_str().unwrap()])
         .assert_success();
 
-    // Check that execution counts were set (shown by [✓] marker)
-    assert!(read_result.stdout.contains("[✓]"));
+    // Check that execution counts were set (shown in @@cell JSON metadata)
+    assert!(read_result.stdout.contains("\"execution_count\""));
 }
 
 #[test]

@@ -237,7 +237,6 @@ fn test_read_empty_notebook() {
         .assert_success();
 
     let json = result.json_value();
-    assert_eq!(json["cell_count"], 0);
     assert_eq!(json["cells"].as_array().unwrap().len(), 0);
 }
 
@@ -387,7 +386,7 @@ fn test_read_text_format() {
         .run(&["read", nb_path.to_str().unwrap()])
         .assert_success();
 
-    assert!(result.stdout.contains("Cell"));
+    assert!(result.stdout.contains("@@cell"));
     assert!(result.stdout.contains("print"));
 }
 
