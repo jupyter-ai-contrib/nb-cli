@@ -27,8 +27,12 @@ pub fn render_notebook_markdown(
 
     // Render each cell with index
     for (index, cell) in notebook.cells.iter().enumerate() {
+        if index > 0 {
+            // Add blank line before each cell (except first)
+            result.push('\n');
+        }
         result.push_str(&render_cell(cell, &language, include_outputs, output_dir, inline_limit, index)?);
-        result.push_str("\n");
+        result.push('\n');
     }
 
     Ok(result)
@@ -111,7 +115,7 @@ fn render_cell(
 
             // Render outputs if requested
             if include_outputs && !outputs.is_empty() {
-                result.push('\n');
+                result.push_str("\n\n");
                 result.push_str(&render_outputs(outputs, output_dir, inline_limit)?);
             }
         }
@@ -194,7 +198,8 @@ fn render_outputs(outputs: &[Output], output_dir: Option<&Path>, inline_limit: u
 
     for (i, output) in outputs.iter().enumerate() {
         if i > 0 {
-            result.push('\n');
+            // Add blank line before each output (except first)
+            result.push_str("\n\n");
         }
         result.push_str(&render_output(output, output_dir, inline_limit)?);
     }

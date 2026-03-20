@@ -1,9 +1,10 @@
 use crate::commands::common::{self, OutputFormat};
+use crate::commands::markdown_renderer;
 use crate::notebook;
 use anyhow::{bail, Result};
 use clap::{Parser, ValueEnum};
 use jupyter_protocol::media::Media;
-use nbformat::v4::{Cell, Output};
+use nbformat::v4::{Cell, Notebook, Output};
 use regex::Regex;
 use serde_json::json;
 use std::fs;
@@ -362,9 +363,9 @@ fn print_empty_results(args: &SearchArgs) -> Result<()> {
         }
         OutputFormat::Markdown => {
             if args.with_errors {
-                println!("No cells with errors found");
+                println!("# No cells with errors found");
             } else {
-                println!("No matches found for pattern: {}", pattern_display);
+                println!("# No matches found for pattern: {}", pattern_display);
             }
         }
     }
@@ -438,36 +439,59 @@ fn print_text(results: &[SearchResult], args: &SearchArgs) -> Result<()> {
         return Ok(());
     }
 
+    // Print summary as a comment
     if args.with_errors && args.pattern.is_none() {
-        println!("Found {} cell(s) with errors\n", cells_matched);
+        println!("# Found {} cell(s) with errors\n", cells_matched);
     } else {
         println!(
-            "Found {} match(es) in {} cell(s)\n",
+            "# Found {} match(es) in {} cell(s)\n",
             total_matches, cells_matched
         );
     }
 
     if args.list_only {
-        println!("Matched cells:");
+        println!("# Matched cells:");
         for result in results {
             println!(
-                "  Cell {} [{}] (ID: {})",
+                "# - Cell {} [{}] (ID: {})",
                 result.cell_index, result.cell_type, result.cell_id
             );
         }
     } else {
+        // Render matching cells in AI-Optimized Markdown format
+        // Create a temporary notebook with just the matching cells
+        let matched_cells: Vec<Cell> = results.iter().map(|r| r.cell.clone()).collect();
+
+        // Get the original notebook to extract metadata
+        let notebook = notebook::read_notebook(&args.file)?;
+
+        let temp_notebook = Notebook {
+            cells: matched_cells,
+            metadata: notebook.metadata.clone(),
+            nbformat: 4,
+            nbformat_minor: 5,
+        };
+
+        // Render the notebook with outputs included
+        let markdown = markdown_renderer::render_notebook_markdown(
+            &temp_notebook,
+            true, // include outputs
+            None, // no output dir for inline display
+            4000, // default inline limit
+        )?;
+
+        print!("{}", markdown);
+
+        // Add match information as comments after the cells
+        println!("\n# Match Details:");
         for result in results {
-            println!(
-                "Cell {} [{}] (ID: {}):",
-                result.cell_index, result.cell_type, result.cell_id
-            );
+            println!("# Cell {} [{}]:", result.cell_index, result.cell_type);
             for m in &result.matches {
                 println!(
-                    "  {} at line {}: {}",
+                    "#   {} at line {}: {}",
                     m.location, m.line_number, m.line_content
                 );
             }
-            println!();
         }
     }
 
