@@ -481,18 +481,6 @@ fn print_text(results: &[SearchResult], args: &SearchArgs) -> Result<()> {
         )?;
 
         print!("{}", markdown);
-
-        // Add match information as comments after the cells
-        println!("\n# Match Details:");
-        for result in results {
-            println!("# Cell {} [{}]:", result.cell_index, result.cell_type);
-            for m in &result.matches {
-                println!(
-                    "#   {} at line {}: {}",
-                    m.location, m.line_number, m.line_content
-                );
-            }
-        }
     }
 
     Ok(())
