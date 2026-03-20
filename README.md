@@ -1,6 +1,43 @@
 # nb - Notebook CLI
 
-A fast, command-line interface for working with Jupyter notebooks. Designed for both humans and AI agents, with human-readable text output by default and JSON output available for programmatic use. Enables reliable notebook manipulation without opening a browser.
+A fast, command-line interface for working with Jupyter notebooks. Designed for both humans and AI agents, with AI-Optimized Markdown format by default and JSON output available for programmatic use. Enables reliable notebook manipulation without opening a browser.
+
+## AI-Optimized Markdown Format
+
+The default output format uses line-oriented sentinels with JSON metadata, specifically designed for AI agents:
+
+```markdown
+@@notebook {"format":"ai-notebook","metadata":{"kernelspec":{...}}}
+
+@@cell {"index":0,"id":"cell-id","cell_type":"code","execution_count":1}
+```python
+import pandas as pd
+```
+@@output {"output_type":"stream","name":"stdout"}
+```text
+Hello, world!
+```
+```
+
+**Key Features:**
+- **Line-oriented sentinels** (`@@notebook`, `@@cell`, `@@output`) for deterministic parsing
+- **JSON metadata** with nbformat v4.5 compliant property names (`cell_type`, `output_type`)
+- **Cell index field** for reliable positional references (even when IDs are missing)
+- **Content-based hashing** using SHA256 for externalized output filenames
+  - Prevents AI agents from guessing filenames
+  - Same content always maps to same file (automatic deduplication)
+- **Absolute paths** for all externalized outputs
+- **40+ MIME types** with JupyterLab-compatible priority
+
+**Format Structure:**
+```
+Line starts with @@   →  Parse as sentinel (notebook/cell/output)
+Following JSON       →  Contains metadata (index, id, type, execution_count, etc.)
+Content after JSON   →  Cell source or output content
+Code/outputs         →  Wrapped in fenced code blocks with language hint
+Markdown cells       →  Raw markdown text (no fence)
+Large outputs        →  Externalized to files, path in @@output JSON
+```
 
 [![BSD-3-Clause License](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org)
@@ -78,9 +115,12 @@ nb cell add analysis.ipynb --source "import pandas as pd"
 nb cell add analysis.ipynb --source "# Analysis" --type markdown
 nb read analysis.ipynb
 
-# Execute and view results
+# Execute and view results (outputs included by default)
 nb execute analysis.ipynb
-nb read analysis.ipynb --with-outputs
+nb read analysis.ipynb
+
+# Control output externalization
+nb read analysis.ipynb --limit 8000 --output-dir ./outputs
 ```
 
 ## Local Mode
@@ -202,16 +242,37 @@ Two ways to reference cells:
 ### Output Format
 
 Control output format for better integration with your workflow:
-- **Text** (default): Human-readable for terminal viewing and debugging
-- **JSON** (`--json`): Structured, nbformat-compliant for programmatic use and AI agents
+- **AI-Optimized Markdown** (default): Line-oriented sentinels with JSON metadata for reliable parsing by AI agents
+- **JSON** (`--json`): Structured, nbformat-compliant for programmatic use
 
 ```bash
-# Default text output
+# Default AI-Optimized Markdown output
 nb read notebook.ipynb
 
 # JSON output for programmatic use
 nb read notebook.ipynb --json
 ```
+
+### Output Externalization
+
+Outputs are included by default. Large outputs (>4000 characters by default) are automatically externalized to separate files:
+
+```bash
+# Control externalization threshold (default: 4000)
+nb read notebook.ipynb --limit 8000
+
+# Specify output directory for externalized files
+nb read notebook.ipynb --output-dir ./notebook-outputs
+
+# Exclude outputs when not needed
+nb read notebook.ipynb --no-output
+```
+
+**Benefits:**
+- Content-based hashing (SHA256) prevents filename guessing by AI agents
+- Same content always maps to same file (automatic deduplication)
+- Absolute paths in output headers for reliable file access
+- Keeps main output clean and focused
 
 ### Multi-line Code
 
@@ -242,8 +303,8 @@ nb execute analysis.ipynb
 # Find problematic cells
 nb search notebook.ipynb --with-errors
 
-# Inspect specific cell with outputs
-nb read notebook.ipynb --cell-index 5 --with-outputs
+# Inspect specific cell (outputs included by default)
+nb read notebook.ipynb --cell-index 5
 
 # Fix the cell
 nb cell update notebook.ipynb --cell-index 5 --source "fixed code"
@@ -261,8 +322,14 @@ nb read notebook.ipynb --cell-index -1     # Last cell
 
 **For AI agents:**
 ```bash
-# Analyze all code in a notebook
+# Read notebook (AI-Optimized Markdown format, outputs included by default)
+nb read notebook.ipynb
+
+# Analyze only code cells
 nb read notebook.ipynb --only-code
+
+# Control externalization for large outputs
+nb read notebook.ipynb --limit 8000 --output-dir ./outputs
 
 # Find cells with errors
 nb search notebook.ipynb --with-errors
@@ -270,6 +337,12 @@ nb search notebook.ipynb --with-errors
 # Add analysis cell and execute
 nb cell add experiment.ipynb --source "df.describe()"
 nb execute experiment.ipynb --cell-index -1
+
+# Parse the AI-Optimized Markdown output
+# - Look for lines starting with @@ for sentinels
+# - Parse JSON metadata after sentinel markers
+# - Cell content follows headers (code in fenced blocks, markdown as raw text)
+# - Large outputs externalized with absolute paths in @@output headers
 ```
 
 ## Examples
