@@ -202,7 +202,7 @@ async fn execute_with_realtime(
     let format = if args.json {
         OutputFormat::Json
     } else {
-        OutputFormat::Text
+        OutputFormat::Markdown
     };
     output_result(&result, &format)?;
 
@@ -315,7 +315,7 @@ fn execute_file_based(args: AddCellArgs) -> Result<()> {
     let format = if args.json {
         OutputFormat::Json
     } else {
-        OutputFormat::Text
+        OutputFormat::Markdown
     };
     output_result(&result, &format)?;
 
@@ -343,7 +343,7 @@ fn output_result(result: &AddCellResult, format: &OutputFormat) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Markdown => {
             println!("Added {} cell to: {}", result.cell_type, result.file);
             println!("Cell ID: {}", result.cell_id);
             println!(

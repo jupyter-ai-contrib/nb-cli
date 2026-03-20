@@ -157,11 +157,11 @@ pub fn execute(args: SearchArgs) -> Result<()> {
     let format = if args.json {
         OutputFormat::Json
     } else {
-        OutputFormat::Text
+        OutputFormat::Markdown
     };
     match format {
         OutputFormat::Json => print_json(&results, &args)?,
-        OutputFormat::Text => print_text(&results, &args)?,
+        OutputFormat::Markdown => print_text(&results, &args)?,
     }
 
     Ok(())
@@ -236,11 +236,12 @@ fn execute_with_errors(args: &SearchArgs) -> Result<()> {
     let format = if args.json {
         OutputFormat::Json
     } else {
-        OutputFormat::Text
+        OutputFormat::Markdown
     };
     match format {
         OutputFormat::Json => print_json(&results, args)?,
-        OutputFormat::Text => print_text(&results, args)?,
+        OutputFormat::Markdown => print_text(&results, args)?,
+        OutputFormat::Markdown => print_text(&results, args)?, // TODO: Implement markdown format
     }
 
     Ok(())
@@ -337,7 +338,7 @@ fn print_empty_results(args: &SearchArgs) -> Result<()> {
     let format = if args.json {
         OutputFormat::Json
     } else {
-        OutputFormat::Text
+        OutputFormat::Markdown
     };
     match format {
         OutputFormat::Json => {
@@ -360,7 +361,7 @@ fn print_empty_results(args: &SearchArgs) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&output)?);
             }
         }
-        OutputFormat::Text => {
+        OutputFormat::Markdown => {
             if args.with_errors {
                 println!("No cells with errors found");
             } else {

@@ -109,7 +109,7 @@ pub fn execute(args: CreateArgs) -> Result<()> {
     let format = if args.json {
         OutputFormat::Json
     } else {
-        OutputFormat::Text
+        OutputFormat::Markdown
     };
     output_result(&result, &format)?;
 
@@ -196,7 +196,7 @@ fn output_result(result: &CreateResult, format: &OutputFormat) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Markdown => {
             println!("Created notebook: {}", result.file);
             println!("Template: {}", result.template);
             println!("Kernel: {}", result.kernel);
