@@ -17,7 +17,22 @@ pub enum CellType {
 #[derive(Clone, Debug)]
 pub enum OutputFormat {
     Json,
+    /// AI-Optimized Markdown format (for read/search commands that render notebook content)
+    Markdown,
+    /// Plain text format (for mutating commands like add/delete/update/create/clear/execute)
     Text,
+}
+
+// AI-Optimized Markdown format constants
+pub const AI_NOTEBOOK_FORMAT: &str = "ai-notebook";
+
+/// Check if output is binary (non-text MIME type)
+pub fn is_binary_mime_type(mime: &str) -> bool {
+    mime.starts_with("image/")
+        || mime.starts_with("audio/")
+        || mime.starts_with("video/")
+        || mime == "application/octet-stream"
+        || mime == "application/pdf"
 }
 
 /// Normalize a cell index, supporting negative indexing (e.g., -1 for last cell)

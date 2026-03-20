@@ -1,9 +1,10 @@
 use crate::commands::common::{self, OutputFormat};
+use crate::commands::markdown_renderer::{self, IndexedCell};
 use crate::notebook;
 use anyhow::{bail, Result};
 use clap::{Parser, ValueEnum};
 use jupyter_protocol::media::Media;
-use nbformat::v4::{Cell, Output};
+use nbformat::v4::{Cell, Notebook, Output};
 use regex::Regex;
 use serde_json::json;
 use std::fs;
@@ -69,11 +70,10 @@ struct Match {
 }
 
 #[derive(Debug)]
-struct SearchResult<'a> {
+struct SearchResult {
     cell_index: usize,
     cell_id: String,
     cell_type: String,
-    cell: &'a Cell,
     matches: Vec<Match>,
 }
 
@@ -147,7 +147,6 @@ pub fn execute(args: SearchArgs) -> Result<()> {
                 cell_index: index,
                 cell_id: common::cell_id_to_string(cell),
                 cell_type: get_cell_type_name(cell),
-                cell,
                 matches: cell_matches,
             });
         }
@@ -157,11 +156,11 @@ pub fn execute(args: SearchArgs) -> Result<()> {
     let format = if args.json {
         OutputFormat::Json
     } else {
-        OutputFormat::Text
+        OutputFormat::Markdown
     };
     match format {
-        OutputFormat::Json => print_json(&results, &args)?,
-        OutputFormat::Text => print_text(&results, &args)?,
+        OutputFormat::Json => print_json(&results, &notebook, &args)?,
+        OutputFormat::Markdown | OutputFormat::Text => print_text(&results, &notebook, &args)?,
     }
 
     Ok(())
@@ -225,7 +224,6 @@ fn execute_with_errors(args: &SearchArgs) -> Result<()> {
                     cell_index: index,
                     cell_id: common::cell_id_to_string(cell),
                     cell_type: get_cell_type_name(cell),
-                    cell,
                     matches: cell_matches,
                 });
             }
@@ -236,11 +234,11 @@ fn execute_with_errors(args: &SearchArgs) -> Result<()> {
     let format = if args.json {
         OutputFormat::Json
     } else {
-        OutputFormat::Text
+        OutputFormat::Markdown
     };
     match format {
-        OutputFormat::Json => print_json(&results, args)?,
-        OutputFormat::Text => print_text(&results, args)?,
+        OutputFormat::Json => print_json(&results, &notebook, args)?,
+        OutputFormat::Markdown | OutputFormat::Text => print_text(&results, &notebook, args)?,
     }
 
     Ok(())
@@ -293,7 +291,6 @@ fn extract_output_text(output: &Output) -> String {
         Output::DisplayData(data) => extract_media_text(&data.data),
         Output::Stream { text, .. } => text.0.clone(),
         Output::Error(error) => {
-            // Combine error name, value, and traceback
             format!(
                 "{}\n{}\n{}",
                 error.ename,
@@ -305,10 +302,8 @@ fn extract_output_text(output: &Output) -> String {
 }
 
 fn extract_media_text(media: &Media) -> String {
-    // Serialize and extract text/plain, text/html, or application/json
     if let Ok(json_val) = serde_json::to_value(media) {
         if let Some(obj) = json_val.as_object() {
-            // Try text-based MIME types in order of preference
             for mime in &["text/plain", "text/html", "application/json"] {
                 if let Some(content) = obj.get(*mime) {
                     return extract_string_from_json(content);
@@ -337,7 +332,7 @@ fn print_empty_results(args: &SearchArgs) -> Result<()> {
     let format = if args.json {
         OutputFormat::Json
     } else {
-        OutputFormat::Text
+        OutputFormat::Markdown
     };
     match format {
         OutputFormat::Json => {
@@ -360,18 +355,18 @@ fn print_empty_results(args: &SearchArgs) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&output)?);
             }
         }
-        OutputFormat::Text => {
+        OutputFormat::Markdown | OutputFormat::Text => {
             if args.with_errors {
-                println!("No cells with errors found");
+                println!("# No cells with errors found");
             } else {
-                println!("No matches found for pattern: {}", pattern_display);
+                println!("# No matches found for pattern: {}", pattern_display);
             }
         }
     }
     Ok(())
 }
 
-fn print_json(results: &[SearchResult], args: &SearchArgs) -> Result<()> {
+fn print_json(results: &[SearchResult], notebook: &Notebook, args: &SearchArgs) -> Result<()> {
     let total_matches: usize = results.iter().map(|r| r.matches.len()).sum();
     let cells_matched = results.len();
 
@@ -392,11 +387,14 @@ fn print_json(results: &[SearchResult], args: &SearchArgs) -> Result<()> {
         let results_json: Vec<serde_json::Value> = results
             .iter()
             .map(|result| {
+                let source = notebook.cells.get(result.cell_index)
+                    .map(|c| c.source().to_vec())
+                    .unwrap_or_default();
                 json!({
                     "cell_index": result.cell_index,
                     "cell_id": result.cell_id,
                     "cell_type": result.cell_type,
-                    "source": result.cell.source(),
+                    "source": source,
                     "match_count": result.matches.len(),
                     "matches": result.matches.iter().map(|m| {
                         json!({
@@ -422,7 +420,7 @@ fn print_json(results: &[SearchResult], args: &SearchArgs) -> Result<()> {
     Ok(())
 }
 
-fn print_text(results: &[SearchResult], args: &SearchArgs) -> Result<()> {
+fn print_text(results: &[SearchResult], notebook: &Notebook, args: &SearchArgs) -> Result<()> {
     let total_matches: usize = results.iter().map(|r| r.matches.len()).sum();
     let cells_matched = results.len();
 
@@ -438,37 +436,45 @@ fn print_text(results: &[SearchResult], args: &SearchArgs) -> Result<()> {
         return Ok(());
     }
 
+    // Print summary as a comment
     if args.with_errors && args.pattern.is_none() {
-        println!("Found {} cell(s) with errors\n", cells_matched);
+        println!("# Found {} cell(s) with errors\n", cells_matched);
     } else {
         println!(
-            "Found {} match(es) in {} cell(s)\n",
+            "# Found {} match(es) in {} cell(s)\n",
             total_matches, cells_matched
         );
     }
 
     if args.list_only {
-        println!("Matched cells:");
+        println!("# Matched cells:");
         for result in results {
             println!(
-                "  Cell {} [{}] (ID: {})",
+                "# - Cell {} [{}] (ID: {})",
                 result.cell_index, result.cell_type, result.cell_id
             );
         }
     } else {
-        for result in results {
-            println!(
-                "Cell {} [{}] (ID: {}):",
-                result.cell_index, result.cell_type, result.cell_id
-            );
-            for m in &result.matches {
-                println!(
-                    "  {} at line {}: {}",
-                    m.location, m.line_number, m.line_content
-                );
-            }
-            println!();
-        }
+        // Render matching cells in AI-Optimized Markdown format with original indices
+        let indexed: Vec<IndexedCell> = results
+            .iter()
+            .filter_map(|r| {
+                notebook.cells.get(r.cell_index).map(|cell| IndexedCell {
+                    index: r.cell_index,
+                    cell,
+                })
+            })
+            .collect();
+
+        let markdown = markdown_renderer::render_indexed_cells_markdown(
+            notebook,
+            &indexed,
+            true, // include outputs
+            None, // no output dir for inline display
+            4000, // default inline limit
+        )?;
+
+        print!("{}", markdown);
     }
 
     Ok(())

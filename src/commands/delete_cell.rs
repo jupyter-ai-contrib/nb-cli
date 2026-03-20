@@ -273,7 +273,7 @@ fn output_result(result: &DeleteCellResult, format: &OutputFormat) -> Result<()>
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Markdown => {
             println!(
                 "Deleted {} cell(s) from: {}",
                 result.cells_deleted, result.file

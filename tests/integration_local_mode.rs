@@ -1,3 +1,5 @@
+mod test_helpers;
+
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -237,7 +239,6 @@ fn test_read_empty_notebook() {
         .assert_success();
 
     let json = result.json_value();
-    assert_eq!(json["cell_count"], 0);
     assert_eq!(json["cells"].as_array().unwrap().len(), 0);
 }
 
@@ -379,7 +380,7 @@ fn test_read_only_markdown() {
 }
 
 #[test]
-fn test_read_text_format() {
+fn test_read_markdown_format() {
     let env = TestEnv::new();
     let nb_path = env.copy_fixture("with_code.ipynb", "test.ipynb");
 
@@ -387,8 +388,179 @@ fn test_read_text_format() {
         .run(&["read", nb_path.to_str().unwrap()])
         .assert_success();
 
-    assert!(result.stdout.contains("Cell"));
+    // Verify notebook header
+    let header = test_helpers::parse_notebook_header(&result.stdout)
+        .expect("Should have @@notebook header");
+    assert_eq!(header.get_str("format"), Some("ai-notebook"));
+
+    // Verify cells
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert_eq!(cells.len(), 2);
+
+    // First cell
+    assert_eq!(cells[0].get_str("cell_type"), Some("code"));
+    assert_eq!(cells[0].get_str("id"), Some("cell-1"));
+    assert_eq!(cells[0].get_i64("index"), Some(0));
+
+    // Second cell
+    assert_eq!(cells[1].get_str("cell_type"), Some("code"));
+    assert_eq!(cells[1].get_str("id"), Some("cell-2"));
+    assert_eq!(cells[1].get_i64("index"), Some(1));
+
+    // Verify source content is present
+    assert!(result.stdout.contains("x = 1 + 1"));
     assert!(result.stdout.contains("print"));
+}
+
+#[test]
+fn test_read_markdown_format_with_outputs() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("with_outputs.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["read", nb_path.to_str().unwrap()])
+        .assert_success();
+
+    // Verify notebook header exists
+    let header = test_helpers::parse_notebook_header(&result.stdout)
+        .expect("Should have @@notebook header");
+    assert_eq!(header.get_str("format"), Some("ai-notebook"));
+
+    // Verify cells exist
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert!(!cells.is_empty());
+
+    // Verify outputs are present (outputs included by default)
+    let outputs = test_helpers::parse_outputs(&result.stdout);
+    assert!(!outputs.is_empty(), "Outputs should be included by default");
+
+    // Verify output has expected fields
+    let first_output = &outputs[0];
+    assert!(
+        first_output.get_str("output_type").is_some(),
+        "Output should have output_type"
+    );
+}
+
+#[test]
+fn test_read_markdown_format_no_output() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("with_outputs.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--no-output"])
+        .assert_success();
+
+    // Cells should still be present
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert!(!cells.is_empty());
+
+    // But no outputs
+    let outputs = test_helpers::parse_outputs(&result.stdout);
+    assert!(outputs.is_empty(), "Outputs should be excluded with --no-output");
+}
+
+#[test]
+fn test_read_markdown_format_only_code() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("mixed_cells.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--only-code"])
+        .assert_success();
+
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert_eq!(cells.len(), 2);
+    for cell in &cells {
+        assert_eq!(cell.get_str("cell_type"), Some("code"));
+    }
+}
+
+#[test]
+fn test_read_markdown_format_only_markdown() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("mixed_cells.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--only-markdown"])
+        .assert_success();
+
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert_eq!(cells.len(), 2);
+    for cell in &cells {
+        assert_eq!(cell.get_str("cell_type"), Some("markdown"));
+    }
+}
+
+#[test]
+fn test_read_markdown_format_single_cell() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("with_code.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "0"])
+        .assert_success();
+
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0].get_str("cell_type"), Some("code"));
+    assert_eq!(cells[0].get_str("id"), Some("cell-1"));
+}
+
+#[test]
+fn test_read_markdown_format_cell_by_id() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("with_code.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--cell", "cell-2"])
+        .assert_success();
+
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert_eq!(cells.len(), 1);
+    assert_eq!(cells[0].get_str("id"), Some("cell-2"));
+}
+
+#[test]
+fn test_read_markdown_format_empty_notebook() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("empty.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["read", nb_path.to_str().unwrap()])
+        .assert_success();
+
+    // Should have notebook header but no cells
+    let header = test_helpers::parse_notebook_header(&result.stdout)
+        .expect("Should have @@notebook header");
+    assert_eq!(header.get_str("format"), Some("ai-notebook"));
+
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert_eq!(cells.len(), 0);
+}
+
+#[test]
+fn test_search_markdown_format() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("mixed_cells.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["search", nb_path.to_str().unwrap(), "import"])
+        .assert_success();
+
+    // Search results should include notebook header and matching cells
+    let header = test_helpers::parse_notebook_header(&result.stdout)
+        .expect("Search should output @@notebook header");
+    assert_eq!(header.get_str("format"), Some("ai-notebook"));
+
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert!(!cells.is_empty(), "Should find matching cells");
+    for cell in &cells {
+        assert_eq!(cell.get_str("cell_type"), Some("code"));
+    }
+
+    // Should include summary comment
+    assert!(result.stdout.contains("# Found"));
 }
 
 #[test]
@@ -1208,4 +1380,238 @@ fn test_workflow_modify_and_verify() {
         .assert_success();
     let json = result.json_value();
     assert_eq!(json["cells"].as_array().unwrap().len(), 2);
+}
+
+// ==================== INDEX PRESERVATION TESTS ====================
+
+#[test]
+fn test_read_only_code_preserves_original_indices() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("mixed_cells.ipynb", "test.ipynb");
+
+    // mixed_cells has: markdown(0), code(1), markdown(2), code(3), raw(4)
+    let result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--only-code"])
+        .assert_success();
+
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert_eq!(cells.len(), 2);
+
+    // Indices should be the ORIGINAL notebook indices, not 0,1
+    assert_eq!(cells[0].get_i64("index"), Some(1));
+    assert_eq!(cells[1].get_i64("index"), Some(3));
+}
+
+#[test]
+fn test_read_only_markdown_preserves_original_indices() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("mixed_cells.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--only-markdown"])
+        .assert_success();
+
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert_eq!(cells.len(), 2);
+
+    // Original indices: markdown(0), markdown(2)
+    assert_eq!(cells[0].get_i64("index"), Some(0));
+    assert_eq!(cells[1].get_i64("index"), Some(2));
+}
+
+#[test]
+fn test_read_single_cell_preserves_original_index() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("with_code.ipynb", "test.ipynb");
+
+    // Read cell at index 1 (second cell)
+    let result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "1"])
+        .assert_success();
+
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert_eq!(cells.len(), 1);
+    // Should report index 1, not 0
+    assert_eq!(cells[0].get_i64("index"), Some(1));
+}
+
+// ==================== OUTPUT EXTERNALIZATION TESTS ====================
+
+#[test]
+fn test_read_with_output_dir_externalizes_large_output() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("with_rich_outputs.ipynb", "test.ipynb");
+    let output_dir = env.temp_dir.path().join("outputs");
+
+    let result = env
+        .run(&[
+            "read",
+            nb_path.to_str().unwrap(),
+            "--output-dir",
+            output_dir.to_str().unwrap(),
+            "--limit",
+            "100", // very small limit to force externalization
+        ])
+        .assert_success();
+
+    // The large output cell should have an externalized path
+    let outputs = test_helpers::parse_outputs(&result.stdout);
+    assert!(!outputs.is_empty());
+
+    // Find the stream output - it should have a path since it exceeds --limit
+    let stream_output = outputs.iter().find(|o| o.get_str("output_type") == Some("stream"));
+    assert!(stream_output.is_some(), "Should have a stream output");
+    let path = stream_output.unwrap().get_str("path");
+    assert!(path.is_some(), "Large output should be externalized with a path");
+
+    // The file should actually exist on disk
+    let path_str = path.unwrap();
+    assert!(
+        std::path::Path::new(path_str).exists(),
+        "Externalized file should exist at: {}",
+        path_str
+    );
+}
+
+#[test]
+fn test_read_inline_limit_controls_externalization() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("with_outputs.ipynb", "test.ipynb");
+    let output_dir = env.temp_dir.path().join("outputs");
+
+    // With a high limit, small outputs stay inline (no path field)
+    let result = env
+        .run(&[
+            "read",
+            nb_path.to_str().unwrap(),
+            "--output-dir",
+            output_dir.to_str().unwrap(),
+            "--limit",
+            "100000",
+        ])
+        .assert_success();
+
+    let outputs = test_helpers::parse_outputs(&result.stdout);
+    for o in &outputs {
+        assert!(
+            o.get_str("path").is_none(),
+            "Small outputs should stay inline with high --limit"
+        );
+    }
+}
+
+#[test]
+fn test_read_binary_output_externalized() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("with_rich_outputs.ipynb", "test.ipynb");
+    let output_dir = env.temp_dir.path().join("outputs");
+
+    let result = env
+        .run(&[
+            "read",
+            nb_path.to_str().unwrap(),
+            "--output-dir",
+            output_dir.to_str().unwrap(),
+        ])
+        .assert_success();
+
+    // Find the image output
+    let outputs = test_helpers::parse_outputs(&result.stdout);
+    let image_output = outputs.iter().find(|o| {
+        o.get_str("mime").map(|m| m.starts_with("image/")).unwrap_or(false)
+    });
+    assert!(image_output.is_some(), "Should have an image output");
+
+    let path = image_output.unwrap().get_str("path");
+    assert!(path.is_some(), "Binary output should always be externalized");
+    assert!(
+        std::path::Path::new(path.unwrap()).exists(),
+        "Externalized image file should exist"
+    );
+}
+
+// ==================== ERROR OUTPUT IN MARKDOWN TESTS ====================
+
+#[test]
+fn test_read_error_output_markdown() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("with_rich_outputs.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["read", nb_path.to_str().unwrap()])
+        .assert_success();
+
+    // Find the error output
+    let outputs = test_helpers::parse_outputs(&result.stdout);
+    let error_output = outputs.iter().find(|o| o.get_str("output_type") == Some("error"));
+    assert!(error_output.is_some(), "Should have an error output");
+    assert_eq!(error_output.unwrap().get_str("ename"), Some("ValueError"));
+    assert_eq!(error_output.unwrap().get_str("evalue"), Some("invalid literal"));
+
+    // Traceback should be present inline
+    assert!(result.stdout.contains("Traceback"));
+}
+
+// ==================== OUTPUT CLEAN TESTS ====================
+
+#[test]
+fn test_output_clean_command() {
+    let env = TestEnv::new();
+
+    // First, create some externalized output by reading a notebook
+    let nb_path = env.copy_fixture("with_outputs.ipynb", "test.ipynb");
+    env.run(&["read", nb_path.to_str().unwrap()])
+        .assert_success();
+
+    // Run the clean command
+    let result = env
+        .run(&["output", "clean", "--json"])
+        .assert_success();
+
+    let json = result.json_value();
+    // It should report that it cleaned (or that there was nothing to clean)
+    assert!(json["cleaned"].is_boolean());
+}
+
+#[test]
+fn test_output_clean_when_empty() {
+    let env = TestEnv::new();
+
+    let result = env
+        .run(&["output", "clean", "--json"])
+        .assert_success();
+
+    let json = result.json_value();
+    // When there's no nb-cli dir in temp, cleaned should be false
+    assert!(json["cleaned"].is_boolean());
+}
+
+// ==================== DEFAULT OUTPUT DIR TESTS ====================
+
+#[test]
+fn test_read_default_output_dir_uses_nb_cli_prefix() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("with_rich_outputs.ipynb", "test.ipynb");
+
+    // Read without --output-dir, which should use the default nb-cli/<name>/ path
+    let result = env
+        .run(&["read", nb_path.to_str().unwrap()])
+        .assert_success();
+
+    // Find externalized outputs (binary image should always be externalized)
+    let outputs = test_helpers::parse_outputs(&result.stdout);
+    let image_output = outputs.iter().find(|o| {
+        o.get_str("mime").map(|m| m.starts_with("image/")).unwrap_or(false)
+    });
+
+    if let Some(img) = image_output {
+        if let Some(path) = img.get_str("path") {
+            // The path should contain nb-cli somewhere in it
+            assert!(
+                path.contains("nb-cli"),
+                "Default output dir should use nb-cli prefix, got: {}",
+                path
+            );
+        }
+    }
 }

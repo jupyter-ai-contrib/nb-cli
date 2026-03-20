@@ -330,7 +330,7 @@ fn output_result(result: &UpdateCellResult, format: &OutputFormat) -> Result<()>
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Markdown => {
             println!("Updated cell at index {}: {}", result.index, result.file);
             println!("Cell ID: {}", result.cell_id);
             println!("Changes: {}", result.updated.join(", "));

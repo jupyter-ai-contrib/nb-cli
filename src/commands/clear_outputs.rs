@@ -106,7 +106,7 @@ fn output_result(result: &ClearOutputsResult, format: &OutputFormat) -> Result<(
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Markdown => {
             println!(
                 "Cleared outputs from {} cell(s) in: {}",
                 result.cells_cleared, result.file

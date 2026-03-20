@@ -343,7 +343,7 @@ fn output_result(result: &AddCellResult, format: &OutputFormat) -> Result<()> {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
-        OutputFormat::Text => {
+        OutputFormat::Text | OutputFormat::Markdown => {
             println!("Added {} cell to: {}", result.cell_type, result.file);
             println!("Cell ID: {}", result.cell_id);
             println!(

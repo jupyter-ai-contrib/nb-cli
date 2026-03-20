@@ -1,18 +1,33 @@
 ---
 name: notebook-cli
-description: ALWAYS use the `nb` CLI for ALL Jupyter notebook operations instead of built-in tools (Read, NotebookEdit, etc). This includes reading, creating, editing cells, executing, and searching notebooks. Outputs human-readable text by default, with --json flag for programmatic access. Supports both local file-based and remote real-time collaboration modes. REQUIRED for all .ipynb files in this project.
+description: ALWAYS use the `nb` CLI for ALL Jupyter notebook operations instead of built-in tools (Read, NotebookEdit, etc). This includes reading, creating, editing cells, executing, and searching notebooks. Outputs AI-Optimized Markdown format by default with line-oriented sentinels (@@notebook, @@cell, @@output) and JSON metadata for deterministic parsing. Supports both local file-based and remote real-time collaboration modes. REQUIRED for all .ipynb files in this project.
 ---
 
 # Working with Jupyter Notebooks using nb
 
 **IMPORTANT**: Use the custom `nb` tool for ALL notebook operations instead of built-in tools like Read or NotebookEdit. This includes reading notebooks.
 
+## AI-Optimized Markdown Format
+
+The default output format uses line-oriented sentinels with JSON metadata for reliable parsing:
+
+- `@@notebook {json}` - Notebook header with format and metadata
+- `@@cell {json}` - Cell header with index, id, cell_type, execution_count, metadata
+- `@@output {json}` - Output header with output_type, mime, name, path (for externalized outputs)
+
+Content includes:
+- Code cells: wrapped in fenced code blocks with language
+- Markdown cells: raw markdown text
+- Outputs: wrapped in fenced code blocks or externalized to files (>4000 chars by default)
+
+Use `--limit` to control externalization threshold and `--output-dir` for externalized file location.
+
 ## Quick Reference (Most Common Commands)
 
 ```bash
 # ALWAYS check --help first if unsure: nb --help, nb cell --help, nb execute --help
 
-# Read entire notebook
+# Read entire notebook - this returns AI friendly markdown
 nb read notebook.ipynb
 
 # Read specific cell (use --cell-index or -i for index, --cell or -c for ID)
@@ -51,8 +66,21 @@ nb create notebook.ipynb --json
 
 ## Read Notebook
 
+Use `nb read notebook.ipynb` in the default output mode for normal notebook reading tasks.
+
+The default output is the preferred agent format:
+
+- Markdown notebook content
+- Sentinel lines starting with `@@notebook`, `@@cell`, and `@@output`
+- JSON metadata on those sentinel lines for deterministic parsing
+
+This default format should be used for summarization, review, inspection, and understanding notebook
+structure and outputs.
+
+While `nb read --json` is available, only use this when you absolutely need the notebook as JSON. Do not use `--json` merely to make parsing easier.
+
 ```bash
-# Read entire notebook
+# Read entire notebook (outputs included by default)
 nb read notebook.ipynb
 
 # Read specific cell by index
@@ -63,21 +91,26 @@ nb read notebook.ipynb -i -1  # Last cell
 nb read notebook.ipynb --cell "abc123"
 nb read notebook.ipynb -c "abc123"
 
-# Read with outputs included
-nb read notebook.ipynb -i 0 --with-outputs
+# Exclude outputs when you don't need them
+nb read notebook.ipynb --no-output
+nb read notebook.ipynb -i 0 --no-output
+
+# Control output externalization (default: 4000 chars)
+nb read notebook.ipynb --limit 8000
+nb read notebook.ipynb --output-dir ./outputs
 
 # Filter by cell type
 nb read notebook.ipynb --only-code
 nb read notebook.ipynb --only-markdown
 
-# Output as JSON (default is text)
+# Output as JSON (nbformat-compliant)
 nb read notebook.ipynb --json
 ```
 
 ## Read Cell
 
 ```bash
-# Read specific cell by index
+# Read specific cell by index (outputs included by default)
 nb read notebook.ipynb --cell-index 0
 nb read notebook.ipynb -i 2
 nb read notebook.ipynb -i -1  # Last cell
@@ -86,8 +119,8 @@ nb read notebook.ipynb -i -1  # Last cell
 nb read notebook.ipynb --cell "unique-cell-id"
 nb read notebook.ipynb -c "unique-cell-id"
 
-# Read cell with its outputs
-nb read notebook.ipynb -i 0 --with-outputs
+# Exclude outputs if not needed
+nb read notebook.ipynb -i 0 --no-output
 ```
 
 ## Add Cell
@@ -261,6 +294,33 @@ nb search notebook.ipynb "pattern" --list-only
 
 ## Output Format
 
-All commands default to human-readable text output. Use `--json` flag for machine-readable JSON:
-- Default: Human-readable text format (pseudo-markdown)
-- `--json`: Machine-readable JSON output for programmatic use
+All commands default to AI-Optimized Markdown format for reliable parsing by AI agents:
+
+- **Default**: AI-Optimized Markdown with line-oriented sentinels (@@notebook, @@cell, @@output)
+  - Uses JSON metadata for deterministic parsing
+  - Cell index field for reliable positional references
+  - Content-based hashing (SHA256) for externalized outputs
+  - Absolute paths for all externalized files
+  - nbformat v4.5 compliant property names
+
+- **JSON** (`--json`): nbformat-compliant JSON for programmatic use
+
+## Output Externalization
+
+Large outputs (>4000 chars by default) are automatically externalized to separate files:
+
+```bash
+# Control externalization threshold (default: 4000)
+nb read notebook.ipynb --limit 8000
+
+# Specify output directory for externalized files
+nb read notebook.ipynb --output-dir ./notebook-outputs
+
+# Exclude all outputs if not needed
+nb read notebook.ipynb --no-output
+```
+
+Externalized files use content-based SHA256 hashing for filenames:
+- Prevents AI agents from guessing filenames
+- Same content always maps to same file (automatic deduplication)
+- Returns absolute paths in `@@output` headers
