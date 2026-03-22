@@ -389,8 +389,8 @@ fn test_read_markdown_format() {
         .assert_success();
 
     // Verify notebook header
-    let header = test_helpers::parse_notebook_header(&result.stdout)
-        .expect("Should have @@notebook header");
+    let header =
+        test_helpers::parse_notebook_header(&result.stdout).expect("Should have @@notebook header");
     assert_eq!(header.get_str("format"), Some("ai-notebook"));
 
     // Verify cells
@@ -422,8 +422,8 @@ fn test_read_markdown_format_with_outputs() {
         .assert_success();
 
     // Verify notebook header exists
-    let header = test_helpers::parse_notebook_header(&result.stdout)
-        .expect("Should have @@notebook header");
+    let header =
+        test_helpers::parse_notebook_header(&result.stdout).expect("Should have @@notebook header");
     assert_eq!(header.get_str("format"), Some("ai-notebook"));
 
     // Verify cells exist
@@ -457,7 +457,10 @@ fn test_read_markdown_format_no_output() {
 
     // But no outputs
     let outputs = test_helpers::parse_outputs(&result.stdout);
-    assert!(outputs.is_empty(), "Outputs should be excluded with --no-output");
+    assert!(
+        outputs.is_empty(),
+        "Outputs should be excluded with --no-output"
+    );
 }
 
 #[test]
@@ -531,8 +534,8 @@ fn test_read_markdown_format_empty_notebook() {
         .assert_success();
 
     // Should have notebook header but no cells
-    let header = test_helpers::parse_notebook_header(&result.stdout)
-        .expect("Should have @@notebook header");
+    let header =
+        test_helpers::parse_notebook_header(&result.stdout).expect("Should have @@notebook header");
     assert_eq!(header.get_str("format"), Some("ai-notebook"));
 
     let cells = test_helpers::parse_cells(&result.stdout);
@@ -1459,10 +1462,15 @@ fn test_read_with_output_dir_externalizes_large_output() {
     assert!(!outputs.is_empty());
 
     // Find the stream output - it should have a path since it exceeds --limit
-    let stream_output = outputs.iter().find(|o| o.get_str("output_type") == Some("stream"));
+    let stream_output = outputs
+        .iter()
+        .find(|o| o.get_str("output_type") == Some("stream"));
     assert!(stream_output.is_some(), "Should have a stream output");
     let path = stream_output.unwrap().get_str("path");
-    assert!(path.is_some(), "Large output should be externalized with a path");
+    assert!(
+        path.is_some(),
+        "Large output should be externalized with a path"
+    );
 
     // The file should actually exist on disk
     let path_str = path.unwrap();
@@ -1518,12 +1526,17 @@ fn test_read_binary_output_externalized() {
     // Find the image output
     let outputs = test_helpers::parse_outputs(&result.stdout);
     let image_output = outputs.iter().find(|o| {
-        o.get_str("mime").map(|m| m.starts_with("image/")).unwrap_or(false)
+        o.get_str("mime")
+            .map(|m| m.starts_with("image/"))
+            .unwrap_or(false)
     });
     assert!(image_output.is_some(), "Should have an image output");
 
     let path = image_output.unwrap().get_str("path");
-    assert!(path.is_some(), "Binary output should always be externalized");
+    assert!(
+        path.is_some(),
+        "Binary output should always be externalized"
+    );
     assert!(
         std::path::Path::new(path.unwrap()).exists(),
         "Externalized image file should exist"
@@ -1543,10 +1556,15 @@ fn test_read_error_output_markdown() {
 
     // Find the error output
     let outputs = test_helpers::parse_outputs(&result.stdout);
-    let error_output = outputs.iter().find(|o| o.get_str("output_type") == Some("error"));
+    let error_output = outputs
+        .iter()
+        .find(|o| o.get_str("output_type") == Some("error"));
     assert!(error_output.is_some(), "Should have an error output");
     assert_eq!(error_output.unwrap().get_str("ename"), Some("ValueError"));
-    assert_eq!(error_output.unwrap().get_str("evalue"), Some("invalid literal"));
+    assert_eq!(
+        error_output.unwrap().get_str("evalue"),
+        Some("invalid literal")
+    );
 
     // Traceback should be present inline
     assert!(result.stdout.contains("Traceback"));
@@ -1564,9 +1582,7 @@ fn test_output_clean_command() {
         .assert_success();
 
     // Run the clean command
-    let result = env
-        .run(&["output", "clean", "--json"])
-        .assert_success();
+    let result = env.run(&["output", "clean", "--json"]).assert_success();
 
     let json = result.json_value();
     // It should report that it cleaned (or that there was nothing to clean)
@@ -1577,9 +1593,7 @@ fn test_output_clean_command() {
 fn test_output_clean_when_empty() {
     let env = TestEnv::new();
 
-    let result = env
-        .run(&["output", "clean", "--json"])
-        .assert_success();
+    let result = env.run(&["output", "clean", "--json"]).assert_success();
 
     let json = result.json_value();
     // When there's no nb-cli dir in temp, cleaned should be false
@@ -1601,7 +1615,9 @@ fn test_read_default_output_dir_uses_nb_cli_prefix() {
     // Find externalized outputs (binary image should always be externalized)
     let outputs = test_helpers::parse_outputs(&result.stdout);
     let image_output = outputs.iter().find(|o| {
-        o.get_str("mime").map(|m| m.starts_with("image/")).unwrap_or(false)
+        o.get_str("mime")
+            .map(|m| m.starts_with("image/"))
+            .unwrap_or(false)
     });
 
     if let Some(img) = image_output {

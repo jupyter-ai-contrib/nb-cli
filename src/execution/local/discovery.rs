@@ -87,7 +87,12 @@ fn get_kernel_dirs() -> Vec<PathBuf> {
 
     // Virtual environment kernels (if VIRTUAL_ENV is set)
     if let Ok(venv) = std::env::var("VIRTUAL_ENV") {
-        dirs.push(PathBuf::from(venv).join("share").join("jupyter").join("kernels"));
+        dirs.push(
+            PathBuf::from(venv)
+                .join("share")
+                .join("jupyter")
+                .join("kernels"),
+        );
     }
 
     // User kernels

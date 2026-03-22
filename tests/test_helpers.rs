@@ -43,10 +43,7 @@ pub fn parse_sentinel(line: &str) -> Option<Sentinel> {
 
 /// Parse all sentinel lines from AI-Optimized Markdown output
 pub fn parse_sentinels(output: &str) -> Vec<Sentinel> {
-    output
-        .lines()
-        .filter_map(parse_sentinel)
-        .collect()
+    output.lines().filter_map(parse_sentinel).collect()
 }
 
 /// Extract only @@cell sentinels from output

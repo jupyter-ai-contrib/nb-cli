@@ -158,12 +158,7 @@ fn test_execute_cell_with_output() {
 
     // Verify output was captured from cell 2 (which has print statement)
     let result = env
-        .run(&[
-            "read",
-            nb_path.to_str().unwrap(),
-            "--cell-index",
-            "2",
-        ])
+        .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "2"])
         .assert_success();
 
     // Parse the markdown output for deep validation
@@ -172,7 +167,10 @@ fn test_execute_cell_with_output() {
     assert_eq!(cells[0].get_str("cell_type"), Some("code"));
 
     let outputs = test_helpers::parse_outputs(&result.stdout);
-    assert!(!outputs.is_empty(), "Cell should have outputs after execution");
+    assert!(
+        !outputs.is_empty(),
+        "Cell should have outputs after execution"
+    );
     assert!(
         outputs[0].get_str("output_type").is_some(),
         "Output should have output_type"

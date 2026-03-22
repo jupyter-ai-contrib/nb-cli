@@ -212,14 +212,15 @@ impl ExecutionBackend for LocalExecutor {
 
         // Read kernelspec from the found path
         let kernel_json_path = kernel_spec_path.join("kernel.json");
-        let kernel_json_content = tokio::fs::read_to_string(&kernel_json_path)
-            .await
-            .context(format!(
-                "Failed to read kernel spec from {}",
-                kernel_json_path.display()
-            ))?;
-        let kernelspec: JupyterKernelspec = serde_json::from_str(&kernel_json_content)
-            .context("Failed to parse kernel.json")?;
+        let kernel_json_content =
+            tokio::fs::read_to_string(&kernel_json_path)
+                .await
+                .context(format!(
+                    "Failed to read kernel spec from {}",
+                    kernel_json_path.display()
+                ))?;
+        let kernelspec: JupyterKernelspec =
+            serde_json::from_str(&kernel_json_content).context("Failed to parse kernel.json")?;
 
         let kernel_spec = runtimelib::KernelspecDir {
             kernel_name: kernel_name.clone(),

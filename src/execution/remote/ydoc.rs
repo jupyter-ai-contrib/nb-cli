@@ -34,8 +34,7 @@ impl YDocClient {
     /// Connect to Y.js room for the given notebook
     pub async fn connect(server_url: String, token: String, notebook_path: String) -> Result<Self> {
         // Step 1: Get file ID from FileID API
-        let file_id = Self::get_file_id(&server_url, &token, &notebook_path)
-            .await?;
+        let file_id = Self::get_file_id(&server_url, &token, &notebook_path).await?;
 
         // Step 2: Connect to room WebSocket
         let ws_url = Self::build_room_ws_url(&server_url, &file_id, &token)?;

@@ -119,14 +119,9 @@ async fn execute_with_realtime(
     let remaining_cells = notebook.cells.len() - cells_deleted;
 
     // Delete cells via Y.js (don't write to file - let JupyterLab handle persistence)
-    ydoc_notebook_ops::ydoc_delete_cells(
-        &server_url,
-        &token,
-        notebook_filename,
-        &sorted_indices,
-    )
-    .await
-    .context("Error deleting cells")?;
+    ydoc_notebook_ops::ydoc_delete_cells(&server_url, &token, notebook_filename, &sorted_indices)
+        .await
+        .context("Error deleting cells")?;
 
     // Output result
     let result = DeleteCellResult {

@@ -78,7 +78,15 @@ pub fn execute(args: ReadArgs) -> Result<()> {
     // Handle specific cell by ID
     if let Some(ref cell_id) = args.cell {
         let (index, cell) = common::find_cell_by_id(&notebook.cells, cell_id)?;
-        output_cell_with_optional_output(cell, index, &notebook, &format, include_outputs, output_dir.as_deref(), args.limit)?;
+        output_cell_with_optional_output(
+            cell,
+            index,
+            &notebook,
+            &format,
+            include_outputs,
+            output_dir.as_deref(),
+            args.limit,
+        )?;
         return Ok(());
     }
 
@@ -91,15 +99,28 @@ pub fn execute(args: ReadArgs) -> Result<()> {
             notebook.cells.len()
         ))?;
 
-        output_cell_with_optional_output(cell, index, &notebook, &format, include_outputs, output_dir.as_deref(), args.limit)?;
+        output_cell_with_optional_output(
+            cell,
+            index,
+            &notebook,
+            &format,
+            include_outputs,
+            output_dir.as_deref(),
+            args.limit,
+        )?;
         return Ok(());
     }
 
     // Handle --only-code flag
     if args.only_code {
-        output_filtered_cells(&notebook, &format, include_outputs, output_dir.as_deref(), args.limit, |cell| {
-            matches!(cell, Cell::Code { .. })
-        })?;
+        output_filtered_cells(
+            &notebook,
+            &format,
+            include_outputs,
+            output_dir.as_deref(),
+            args.limit,
+            |cell| matches!(cell, Cell::Code { .. }),
+        )?;
         return Ok(());
     }
 
@@ -112,7 +133,13 @@ pub fn execute(args: ReadArgs) -> Result<()> {
     }
 
     // Default: show notebook structure
-    output_notebook_structure(&notebook, &format, include_outputs, output_dir.as_deref(), args.limit)?;
+    output_notebook_structure(
+        &notebook,
+        &format,
+        include_outputs,
+        output_dir.as_deref(),
+        args.limit,
+    )?;
     Ok(())
 }
 
@@ -223,8 +250,12 @@ fn output_notebook_structure(
     if with_outputs {
         match format {
             OutputFormat::Markdown | OutputFormat::Text => {
-                let markdown =
-                    markdown_renderer::render_notebook_markdown(notebook, true, output_dir, inline_limit)?;
+                let markdown = markdown_renderer::render_notebook_markdown(
+                    notebook,
+                    true,
+                    output_dir,
+                    inline_limit,
+                )?;
                 print!("{}", markdown);
             }
             OutputFormat::Json => {

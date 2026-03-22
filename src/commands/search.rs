@@ -387,7 +387,9 @@ fn print_json(results: &[SearchResult], notebook: &Notebook, args: &SearchArgs) 
         let results_json: Vec<serde_json::Value> = results
             .iter()
             .map(|result| {
-                let source = notebook.cells.get(result.cell_index)
+                let source = notebook
+                    .cells
+                    .get(result.cell_index)
                     .map(|c| c.source().to_vec())
                     .unwrap_or_default();
                 json!({
@@ -467,9 +469,7 @@ fn print_text(results: &[SearchResult], notebook: &Notebook, args: &SearchArgs) 
             .collect();
 
         let markdown = markdown_renderer::render_indexed_cells_markdown(
-            notebook,
-            &indexed,
-            true, // include outputs
+            notebook, &indexed, true, // include outputs
             None, // no output dir for inline display
             4000, // default inline limit
         )?;
