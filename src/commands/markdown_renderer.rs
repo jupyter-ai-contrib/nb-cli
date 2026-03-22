@@ -1,6 +1,4 @@
-use crate::commands::common::{
-    self, is_binary_mime_type, AI_NOTEBOOK_FORMAT,
-};
+use crate::commands::common::{self, is_binary_mime_type, AI_NOTEBOOK_FORMAT};
 use anyhow::{Context, Result};
 use base64::Engine;
 use jupyter_protocol::media::Media;
@@ -30,7 +28,13 @@ pub fn render_notebook_markdown(
         .enumerate()
         .map(|(i, cell)| IndexedCell { index: i, cell })
         .collect();
-    render_indexed_cells_markdown(notebook, &indexed_cells, include_outputs, output_dir, inline_limit)
+    render_indexed_cells_markdown(
+        notebook,
+        &indexed_cells,
+        include_outputs,
+        output_dir,
+        inline_limit,
+    )
 }
 
 /// Render a subset of cells with their original indices preserved.
@@ -56,7 +60,14 @@ pub fn render_indexed_cells_markdown(
         if i > 0 {
             result.push('\n');
         }
-        result.push_str(&render_cell(indexed.cell, &language, include_outputs, output_dir, inline_limit, indexed.index)?);
+        result.push_str(&render_cell(
+            indexed.cell,
+            &language,
+            include_outputs,
+            output_dir,
+            inline_limit,
+            indexed.index,
+        )?);
         result.push('\n');
     }
 
@@ -107,7 +118,9 @@ fn render_cell(
     // Render cell header and body
     match cell {
         Cell::Markdown { metadata, .. } => {
-            result.push_str(&render_cell_header("markdown", &cell_id, None, metadata, index)?);
+            result.push_str(&render_cell_header(
+                "markdown", &cell_id, None, metadata, index,
+            )?);
             result.push('\n');
             result.push_str(&render_cell_body(cell, language)?);
         }
@@ -117,7 +130,13 @@ fn render_cell(
             outputs,
             ..
         } => {
-            result.push_str(&render_cell_header("code", &cell_id, *execution_count, metadata, index)?);
+            result.push_str(&render_cell_header(
+                "code",
+                &cell_id,
+                *execution_count,
+                metadata,
+                index,
+            )?);
             result.push('\n');
             result.push_str(&render_cell_body(cell, language)?);
 
@@ -189,7 +208,11 @@ fn render_cell_body(cell: &Cell, language: &str) -> Result<String> {
 }
 
 /// Render all outputs for a cell
-fn render_outputs(outputs: &[Output], output_dir: Option<&Path>, inline_limit: usize) -> Result<String> {
+fn render_outputs(
+    outputs: &[Output],
+    output_dir: Option<&Path>,
+    inline_limit: usize,
+) -> Result<String> {
     let mut result = String::new();
 
     for (i, output) in outputs.iter().enumerate() {
@@ -301,7 +324,11 @@ impl OutputHeaderBuilder {
 }
 
 /// Render a single output
-fn render_output(output: &Output, output_dir: Option<&Path>, inline_limit: usize) -> Result<String> {
+fn render_output(
+    output: &Output,
+    output_dir: Option<&Path>,
+    inline_limit: usize,
+) -> Result<String> {
     match output {
         Output::Stream { name, text } => {
             let text_str = text.0.clone();
@@ -341,7 +368,14 @@ fn render_output(output: &Output, output_dir: Option<&Path>, inline_limit: usize
         }
         Output::DisplayData(data) => {
             let metadata_value = serde_json::to_value(&data.metadata)?;
-            render_output_data("display_data", &data.data, None, output_dir, metadata_value, inline_limit)
+            render_output_data(
+                "display_data",
+                &data.data,
+                None,
+                output_dir,
+                metadata_value,
+                inline_limit,
+            )
         }
         Output::Error(error) => {
             let traceback = error.traceback.join("\n");
@@ -406,18 +440,19 @@ fn render_output_data(
     // Extract text content
     let text_content = match content {
         serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Array(arr) => {
-            arr.iter()
-                .filter_map(|v| v.as_str())
-                .collect::<Vec<_>>()
-                .join("")
-        }
+        serde_json::Value::Array(arr) => arr
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect::<Vec<_>>()
+            .join(""),
         _ => serde_json::to_string(content)?,
     };
 
     // Build the base header
     let make_header = |path: Option<PathBuf>| {
-        let mut builder = OutputHeaderBuilder::new(output_type).mime(mime).metadata(metadata.clone());
+        let mut builder = OutputHeaderBuilder::new(output_type)
+            .mime(mime)
+            .metadata(metadata.clone());
         if let Some(count) = execution_count {
             builder = builder.execution_count(count);
         }
@@ -443,10 +478,18 @@ fn render_output_data(
             let path = externalize_output(text_content.as_bytes(), mime, dir)?;
             Ok(make_header(Some(path)))
         } else {
-            Ok(format!("{}\n{}", make_header(None), render_inline_text_output(&text_content, mime)))
+            Ok(format!(
+                "{}\n{}",
+                make_header(None),
+                render_inline_text_output(&text_content, mime)
+            ))
         }
     } else {
-        Ok(format!("{}\n{}", make_header(None), render_inline_text_output(&text_content, mime)))
+        Ok(format!(
+            "{}\n{}",
+            make_header(None),
+            render_inline_text_output(&text_content, mime)
+        ))
     }
 }
 
@@ -479,8 +522,8 @@ fn externalize_output(content: &[u8], mime: &str, output_dir: &Path) -> Result<P
         fs::write(&path, content)?;
     }
 
-    let absolute_path = fs::canonicalize(&path)
-        .context("Failed to get absolute path for externalized output")?;
+    let absolute_path =
+        fs::canonicalize(&path).context("Failed to get absolute path for externalized output")?;
 
     Ok(absolute_path)
 }
@@ -572,8 +615,7 @@ pub fn notebook_output_dir(notebook_path: &str) -> PathBuf {
 pub fn clean_output_dirs() -> Result<()> {
     let nb_cli_dir = std::env::temp_dir().join("nb-cli");
     if nb_cli_dir.exists() {
-        fs::remove_dir_all(&nb_cli_dir)
-            .context("Failed to remove nb-cli output directory")?;
+        fs::remove_dir_all(&nb_cli_dir).context("Failed to remove nb-cli output directory")?;
     }
     Ok(())
 }
@@ -597,6 +639,7 @@ mod tests {
         assert!(is_binary_mime_type("audio/mp3"));
         assert!(is_binary_mime_type("video/mp4"));
         assert!(is_binary_mime_type("application/pdf"));
+        assert!(!is_binary_mime_type("image/svg+xml"));
         assert!(!is_binary_mime_type("text/plain"));
         assert!(!is_binary_mime_type("application/json"));
     }
@@ -644,14 +687,28 @@ mod tests {
 
     #[test]
     fn test_output_header_builder() {
-        let header = OutputHeaderBuilder::new("stream")
-            .name("stdout")
-            .build();
+        let header = OutputHeaderBuilder::new("stream").name("stdout").build();
         assert!(header.starts_with("@@output "));
         let json_str = &header["@@output ".len()..];
         let json: serde_json::Value = serde_json::from_str(json_str).unwrap();
         assert_eq!(json["output_type"], "stream");
         assert_eq!(json["name"], "stdout");
+    }
+
+    #[test]
+    fn test_svg_output_rendered_as_text() {
+        // SVG is stored as raw XML in Jupyter (not base64), so it must not
+        // go through the binary/base64 decode path.
+        let svg_xml = "<svg xmlns=\"http://www.w3.org/2000/svg\"><circle r=\"10\"/></svg>";
+        let media_json = json!({ "image/svg+xml": svg_xml });
+        let media: Media = serde_json::from_value(media_json).unwrap();
+
+        let result =
+            render_output_data("display_data", &media, None, None, json!({}), 10_000).unwrap();
+
+        // Should contain the raw SVG markup inline, not error out
+        assert!(result.contains(svg_xml), "SVG XML should appear inline");
+        assert!(result.contains("```svg"), "SVG should be fenced as svg");
     }
 
     #[test]

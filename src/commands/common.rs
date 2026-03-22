@@ -28,7 +28,7 @@ pub const AI_NOTEBOOK_FORMAT: &str = "ai-notebook";
 
 /// Check if output is binary (non-text MIME type)
 pub fn is_binary_mime_type(mime: &str) -> bool {
-    mime.starts_with("image/")
+    (mime.starts_with("image/") && mime != "image/svg+xml")
         || mime.starts_with("audio/")
         || mime.starts_with("video/")
         || mime == "application/octet-stream"
