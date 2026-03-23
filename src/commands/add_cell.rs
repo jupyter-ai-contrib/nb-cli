@@ -195,7 +195,7 @@ async fn execute_with_realtime(
     };
 
     let result = AddCellResult {
-        file: args.file.clone(),
+        file: file_path.clone(),
         cell_type: cell_type_str.to_string(),
         cell_id: cell_id.to_string(),
         index: insert_index,
@@ -311,7 +311,7 @@ fn execute_file_based(args: AddCellArgs) -> Result<()> {
     };
 
     let result = AddCellResult {
-        file: args.file.clone(),
+        file: file_path.clone(),
         cell_type: cell_type_str.to_string(),
         cell_id: cell_id.to_string(),
         index: insert_index,

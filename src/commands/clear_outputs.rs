@@ -72,7 +72,7 @@ pub fn execute(args: ClearOutputsArgs) -> Result<()> {
 
     // Output result
     let result = ClearOutputsResult {
-        file: args.file.clone(),
+        file: file_path.clone(),
         cells_cleared,
         execution_counts_cleared: !args.keep_execution_count,
     };
