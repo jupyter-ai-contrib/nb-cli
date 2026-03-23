@@ -26,6 +26,16 @@ pub enum OutputFormat {
 // AI-Optimized Markdown format constants
 pub const AI_NOTEBOOK_FORMAT: &str = "ai-notebook";
 
+/// Normalize notebook path by adding .ipynb extension if missing
+/// This allows users to omit the .ipynb extension for convenience
+pub fn normalize_notebook_path(path: &str) -> String {
+    if path.ends_with(".ipynb") {
+        path.to_string()
+    } else {
+        format!("{}.ipynb", path)
+    }
+}
+
 /// Check if output is binary (non-text MIME type)
 pub fn is_binary_mime_type(mime: &str) -> bool {
     (mime.starts_with("image/") && mime != "image/svg+xml")

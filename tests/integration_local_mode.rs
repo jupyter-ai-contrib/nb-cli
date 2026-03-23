@@ -125,12 +125,7 @@ fn test_create_with_markdown_flag() {
     let nb_path = env.notebook_path("markdown.ipynb");
 
     let result = env
-        .run(&[
-            "create",
-            nb_path.to_str().unwrap(),
-            "--markdown",
-            "--json",
-        ])
+        .run(&["create", nb_path.to_str().unwrap(), "--markdown", "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -1620,4 +1615,108 @@ fn test_read_default_output_dir_uses_nb_cli_prefix() {
             );
         }
     }
+}
+
+// ==================== EXTENSION-OPTIONAL TESTS ====================
+
+#[test]
+fn test_read_without_extension() {
+    let env = TestEnv::new();
+    env.copy_fixture("basic.ipynb", "test.ipynb");
+
+    // Read with extension
+    let result_with_ext = env.run(&["read", "test.ipynb", "--json"]).assert_success();
+
+    // Read without extension
+    let result_without_ext = env.run(&["read", "test", "--json"]).assert_success();
+
+    // Both should produce the same output
+    let json_with = result_with_ext.json_value();
+    let json_without = result_without_ext.json_value();
+    assert_eq!(json_with["cell_count"], json_without["cell_count"]);
+}
+
+#[test]
+fn test_create_without_extension() {
+    let env = TestEnv::new();
+
+    // Create without extension - should add .ipynb automatically
+    let result = env.run(&["create", "notebook", "--json"]).assert_success();
+
+    let json = result.json_value();
+    assert_eq!(json["file"], "notebook.ipynb");
+    assert!(env.notebook_path("notebook.ipynb").exists());
+}
+
+#[test]
+fn test_cell_add_without_extension() {
+    let env = TestEnv::new();
+    env.copy_fixture("basic.ipynb", "test.ipynb");
+
+    // Add cell without extension
+    let result = env
+        .run(&["cell", "add", "test", "-s", "print('hello')", "--json"])
+        .assert_success();
+
+    assert!(result.success);
+    let json = result.json_value();
+    assert_eq!(json["cell_type"], "code");
+}
+
+#[test]
+fn test_cell_update_without_extension() {
+    let env = TestEnv::new();
+    env.copy_fixture("basic.ipynb", "test.ipynb");
+
+    // Update cell without extension
+    let result = env
+        .run(&[
+            "cell", "update", "test", "-i", "0", "-s", "updated", "--json",
+        ])
+        .assert_success();
+
+    assert!(result.success);
+    let json = result.json_value();
+    assert_eq!(json["index"], 0);
+}
+
+#[test]
+fn test_cell_delete_without_extension() {
+    let env = TestEnv::new();
+    env.copy_fixture("mixed_cells.ipynb", "test.ipynb");
+
+    // Delete cell without extension
+    let result = env
+        .run(&["cell", "delete", "test", "-i", "0", "--json"])
+        .assert_success();
+
+    assert!(result.success);
+    let json = result.json_value();
+    assert_eq!(json["cells_deleted"], 1);
+}
+
+#[test]
+fn test_search_without_extension() {
+    let env = TestEnv::new();
+    env.copy_fixture("with_code.ipynb", "test.ipynb");
+
+    // Search without extension
+    let result = env.run(&["search", "test", "print"]).assert_success();
+
+    assert!(result.stdout.contains("match"));
+}
+
+#[test]
+fn test_output_clear_without_extension() {
+    let env = TestEnv::new();
+    env.copy_fixture("with_outputs.ipynb", "test.ipynb");
+
+    // Clear outputs without extension
+    let result = env
+        .run(&["output", "clear", "test", "--all", "--json"])
+        .assert_success();
+
+    assert!(result.success);
+    let json = result.json_value();
+    assert!(json["cells_cleared"].is_number());
 }

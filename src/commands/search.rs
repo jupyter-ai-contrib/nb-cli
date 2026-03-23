@@ -96,8 +96,11 @@ pub fn execute(args: SearchArgs) -> Result<()> {
         bail!("Pattern cannot be empty");
     }
 
+    // Normalize notebook path
+    let file_path = common::normalize_notebook_path(&args.file);
+
     // Phase 1: Text pre-filter - quick scan of raw file
-    let file_content = fs::read_to_string(&args.file)?;
+    let file_content = fs::read_to_string(&file_path)?;
 
     // Build regex pattern with case sensitivity
     let pattern = if args.ignore_case {
@@ -115,7 +118,7 @@ pub fn execute(args: SearchArgs) -> Result<()> {
     }
 
     // Phase 2: Parse and extract structured matches
-    let notebook = notebook::read_notebook(&args.file)?;
+    let notebook = notebook::read_notebook(&file_path)?;
     let mut results = Vec::new();
 
     for (index, cell) in notebook.cells.iter().enumerate() {
@@ -167,7 +170,8 @@ pub fn execute(args: SearchArgs) -> Result<()> {
 }
 
 fn execute_with_errors(args: &SearchArgs) -> Result<()> {
-    let notebook = notebook::read_notebook(&args.file)?;
+    let file_path = common::normalize_notebook_path(&args.file);
+    let notebook = notebook::read_notebook(&file_path)?;
     let mut results = Vec::new();
 
     // Build regex if pattern is provided

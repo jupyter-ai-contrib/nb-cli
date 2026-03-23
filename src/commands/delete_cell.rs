@@ -72,14 +72,17 @@ async fn execute_with_realtime(
         _ => bail!("Expected remote execution mode"),
     };
 
+    // Normalize notebook path
+    let file_path = common::normalize_notebook_path(&args.file);
+
     // Extract notebook filename for Y.js connection
-    let notebook_filename = std::path::Path::new(&args.file)
+    let notebook_filename = std::path::Path::new(&file_path)
         .file_name()
         .and_then(|n| n.to_str())
         .context("Invalid notebook path")?;
 
     // Read notebook to calculate which cells to delete
-    let notebook = notebook::read_notebook(&args.file).context("Failed to read notebook")?;
+    let notebook = notebook::read_notebook(&file_path).context("Failed to read notebook")?;
 
     // Collect indices to delete
     let mut indices_to_delete: HashSet<usize> = HashSet::new();
@@ -141,8 +144,11 @@ async fn execute_with_realtime(
 }
 
 fn execute_file_based(args: DeleteCellArgs) -> Result<()> {
+    // Normalize notebook path
+    let file_path = common::normalize_notebook_path(&args.file);
+
     // Read notebook
-    let mut notebook = notebook::read_notebook(&args.file).context("Failed to read notebook")?;
+    let mut notebook = notebook::read_notebook(&file_path).context("Failed to read notebook")?;
 
     // Collect indices to delete
     let mut indices_to_delete: HashSet<usize> = HashSet::new();
@@ -186,7 +192,7 @@ fn execute_file_based(args: DeleteCellArgs) -> Result<()> {
     let cells_deleted = sorted_indices.len();
 
     // Write notebook atomically
-    notebook::write_notebook_atomic(&args.file, &notebook).context("Failed to write notebook")?;
+    notebook::write_notebook_atomic(&file_path, &notebook).context("Failed to write notebook")?;
 
     // Output result
     let result = DeleteCellResult {

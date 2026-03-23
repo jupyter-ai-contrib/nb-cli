@@ -73,6 +73,7 @@ pub fn execute(args: ExecuteNotebookArgs) -> Result<()> {
 }
 
 async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
+    use crate::commands::common;
     let format = if args.json {
         OutputFormat::Json
     } else {
@@ -80,7 +81,8 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     };
 
     // Read notebook
-    let mut notebook = read_notebook(&args.file).context("Failed to read notebook")?;
+    let file_path = common::normalize_notebook_path(&args.file);
+    let mut notebook = read_notebook(&file_path).context("Failed to read notebook")?;
 
     // Determine cell range
     let (start_idx, end_idx) = if let Some(ref cell_id) = args.cell {
@@ -129,7 +131,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
 
     // Get absolute path to notebook for working directory determination
     let notebook_path_abs =
-        std::fs::canonicalize(&args.file).context("Failed to resolve notebook path")?;
+        std::fs::canonicalize(&file_path).context("Failed to resolve notebook path")?;
     let notebook_path_str = notebook_path_abs
         .to_str()
         .context("Notebook path contains invalid UTF-8")?
@@ -138,7 +140,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     // For remote mode, extract just the filename for session matching
     let notebook_identifier =
         if matches!(mode, crate::execution::types::ExecutionMode::Remote { .. }) {
-            std::path::Path::new(&args.file)
+            std::path::Path::new(&file_path)
                 .file_name()
                 .and_then(|n| n.to_str())
                 .map(String::from)
@@ -247,7 +249,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     match mode {
         ExecutionMode::Local => {
             // Write notebook to file
-            write_notebook_atomic(&args.file, &notebook).context("Failed to write notebook")?;
+            write_notebook_atomic(&file_path, &notebook).context("Failed to write notebook")?;
         }
         ExecutionMode::Remote {
             ref server_url,
@@ -323,7 +325,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
             println!("Failed: {}", output_result.failed_cells);
 
             if matches!(mode, ExecutionMode::Local) {
-                println!("\nNotebook updated: {}", args.file);
+                println!("\nNotebook updated: {}", file_path);
             } else {
                 println!("\n(Executed via Jupyter Server)");
             }

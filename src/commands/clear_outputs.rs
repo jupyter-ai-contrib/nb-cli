@@ -39,8 +39,11 @@ struct ClearOutputsResult {
 }
 
 pub fn execute(args: ClearOutputsArgs) -> Result<()> {
+    // Normalize notebook path
+    let file_path = common::normalize_notebook_path(&args.file);
+
     // Read notebook
-    let mut notebook = notebook::read_notebook(&args.file).context("Failed to read notebook")?;
+    let mut notebook = notebook::read_notebook(&file_path).context("Failed to read notebook")?;
 
     let cells_cleared = if let Some(ref cell_id) = args.cell {
         // Clear specific cell by ID
@@ -65,7 +68,7 @@ pub fn execute(args: ClearOutputsArgs) -> Result<()> {
     };
 
     // Write notebook atomically
-    notebook::write_notebook_atomic(&args.file, &notebook).context("Failed to write notebook")?;
+    notebook::write_notebook_atomic(&file_path, &notebook).context("Failed to write notebook")?;
 
     // Output result
     let result = ClearOutputsResult {
