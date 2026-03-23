@@ -169,7 +169,7 @@ async fn execute_with_realtime(
 
     // Output result
     let result = UpdateCellResult {
-        file: args.file.clone(),
+        file: file_path.clone(),
         cell_id,
         index,
         updated: updates,
@@ -315,7 +315,7 @@ fn execute_file_based(args: UpdateCellArgs) -> Result<()> {
 
     // Output result
     let result = UpdateCellResult {
-        file: args.file.clone(),
+        file: file_path.clone(),
         cell_id,
         index,
         updated: updates,

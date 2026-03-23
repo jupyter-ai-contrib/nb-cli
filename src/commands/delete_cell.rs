@@ -128,7 +128,7 @@ async fn execute_with_realtime(
 
     // Output result
     let result = DeleteCellResult {
-        file: args.file.clone(),
+        file: file_path.clone(),
         cells_deleted,
         remaining_cells,
     };
@@ -196,7 +196,7 @@ fn execute_file_based(args: DeleteCellArgs) -> Result<()> {
 
     // Output result
     let result = DeleteCellResult {
-        file: args.file.clone(),
+        file: file_path.clone(),
         cells_deleted,
         remaining_cells: notebook.cells.len(),
     };
