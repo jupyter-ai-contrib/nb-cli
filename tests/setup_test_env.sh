@@ -23,9 +23,10 @@ fi
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 VENV_PATH="$SCRIPT_DIR/.test-venv"
 
-# Create venv if it doesn't exist
-if [ ! -d "$VENV_PATH" ]; then
+# Check if venv exists AND is valid
+if [ ! -d "$VENV_PATH" ] || [ ! -f "$VENV_PATH/bin/python" ]; then
     echo "📦 Creating test virtual environment..."
+    rm -rf "$VENV_PATH"  # Clean up if partially exists
     uv venv "$VENV_PATH"
 else
     echo "✅ Test venv already exists"
