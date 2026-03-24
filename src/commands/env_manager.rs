@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Environment manager types for running Jupyter commands
@@ -82,7 +82,8 @@ impl EnvConfig {
 /// Searches upward from the current directory for a directory containing
 /// `pyproject.toml`, `uv.toml`, or `uv.lock`
 fn find_uv_project_root() -> Result<PathBuf> {
-    find_project_root(&["pyproject.toml", "uv.toml", "uv.lock"]).with_context(|| {
+    let current_dir = std::env::current_dir().context("Failed to get current directory")?;
+    find_project_root(&current_dir, &["pyproject.toml", "uv.toml", "uv.lock"]).with_context(|| {
         format!(
             "No uv project found.\n\
             \n\
@@ -95,9 +96,7 @@ fn find_uv_project_root() -> Result<PathBuf> {
               1. Initialize a uv project: uv init\n\
               2. Or navigate to a directory with a uv project\n\
               3. Or omit the --uv flag to use jupyter directly",
-            std::env::current_dir()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| "unknown".to_string())
+            current_dir.display()
         )
     })
 }
@@ -107,7 +106,8 @@ fn find_uv_project_root() -> Result<PathBuf> {
 /// Searches upward from the current directory for a directory containing
 /// `pyproject.toml`, `pixi.toml`, or `pixi.lock`
 fn find_pixi_project_root() -> Result<PathBuf> {
-    find_project_root(&["pyproject.toml", "pixi.toml", "pixi.lock"]).with_context(|| {
+    let current_dir = std::env::current_dir().context("Failed to get current directory")?;
+    find_project_root(&current_dir, &["pyproject.toml", "pixi.toml", "pixi.lock"]).with_context(|| {
         format!(
             "No pixi project found.\n\
             \n\
@@ -120,20 +120,16 @@ fn find_pixi_project_root() -> Result<PathBuf> {
               1. Initialize a pixi project: pixi init\n\
               2. Or navigate to a directory with a pixi project\n\
               3. Or omit the --pixi flag to use jupyter directly",
-            std::env::current_dir()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| "unknown".to_string())
+            current_dir.display()
         )
     })
 }
 
 /// Find the root directory containing one of the marker files
 ///
-/// Searches upward from the current directory until one of the marker files is found
-fn find_project_root(marker_files: &[&str]) -> Result<PathBuf> {
-    let current_dir = std::env::current_dir().context("Failed to get current directory")?;
-
-    let mut path = current_dir.as_path();
+/// Searches upward from the given starting directory until one of the marker files is found
+fn find_project_root(start_dir: &Path, marker_files: &[&str]) -> Result<PathBuf> {
+    let mut path = start_dir;
 
     loop {
         // Check if any marker file exists in this directory
@@ -208,14 +204,7 @@ mod tests {
         let marker_path = temp_dir.path().join("pyproject.toml");
         fs::write(&marker_path, "").unwrap();
 
-        // Change to temp directory
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
-
-        let result = find_project_root(&["pyproject.toml"]);
-
-        // Restore original directory (ignore errors in cleanup)
-        let _ = std::env::set_current_dir(original_dir);
+        let result = find_project_root(temp_dir.path(), &["pyproject.toml"]);
 
         assert!(result.is_ok());
         // Canonicalize both paths to handle symlinks (e.g., /var vs /private/var on macOS)
@@ -231,18 +220,11 @@ mod tests {
         let marker_path = temp_dir.path().join("uv.lock");
         fs::write(&marker_path, "").unwrap();
 
-        // Create subdirectory
+        // Create subdirectory and search from there
         let sub_dir = temp_dir.path().join("subdir");
         fs::create_dir(&sub_dir).unwrap();
 
-        // Change to subdirectory
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(&sub_dir).unwrap();
-
-        let result = find_project_root(&["uv.lock"]);
-
-        // Restore original directory (ignore errors in cleanup)
-        let _ = std::env::set_current_dir(original_dir);
+        let result = find_project_root(&sub_dir, &["uv.lock"]);
 
         assert!(result.is_ok());
         // Canonicalize both paths to handle symlinks (e.g., /var vs /private/var on macOS)
@@ -256,14 +238,7 @@ mod tests {
     fn test_find_project_root_no_match() {
         let temp_dir = TempDir::new().unwrap();
 
-        // Change to temp directory (no marker files)
-        let original_dir = std::env::current_dir().unwrap();
-        std::env::set_current_dir(temp_dir.path()).unwrap();
-
-        let result = find_project_root(&["nonexistent.toml"]);
-
-        // Restore original directory (ignore errors in cleanup)
-        let _ = std::env::set_current_dir(original_dir);
+        let result = find_project_root(temp_dir.path(), &["nonexistent.toml"]);
 
         assert!(result.is_err());
     }
