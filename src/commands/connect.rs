@@ -243,7 +243,10 @@ async fn detect_jupyter_servers(env_config: &EnvConfig) -> Result<Vec<DetectedSe
             }
             Err(e) => {
                 // Skip lines that aren't valid JSON (e.g., informational messages)
-                eprintln!("Warning: Failed to parse line as JSON: {} (error: {})", line, e);
+                eprintln!(
+                    "Warning: Failed to parse line as JSON: {} (error: {})",
+                    line, e
+                );
             }
         }
     }

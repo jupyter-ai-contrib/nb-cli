@@ -93,14 +93,17 @@ async fn execute_with_realtime(
         _ => bail!("Expected remote execution mode"),
     };
 
+    // Normalize notebook path
+    let file_path = common::normalize_notebook_path(&args.file);
+
     // Extract notebook filename for Y.js connection
-    let notebook_filename = std::path::Path::new(&args.file)
+    let notebook_filename = std::path::Path::new(&file_path)
         .file_name()
         .and_then(|n| n.to_str())
         .context("Invalid notebook path")?;
 
     // Read notebook to calculate insertion index and create cell
-    let notebook = notebook::read_notebook(&args.file).context("Failed to read notebook")?;
+    let notebook = notebook::read_notebook(&file_path).context("Failed to read notebook")?;
 
     // Parse source content
     let source = common::parse_source(&args.source)?;
@@ -192,7 +195,7 @@ async fn execute_with_realtime(
     };
 
     let result = AddCellResult {
-        file: args.file.clone(),
+        file: file_path.clone(),
         cell_type: cell_type_str.to_string(),
         cell_id: cell_id.to_string(),
         index: insert_index,
@@ -210,8 +213,11 @@ async fn execute_with_realtime(
 }
 
 fn execute_file_based(args: AddCellArgs) -> Result<()> {
+    // Normalize notebook path
+    let file_path = common::normalize_notebook_path(&args.file);
+
     // Read notebook
-    let mut notebook = notebook::read_notebook(&args.file).context("Failed to read notebook")?;
+    let mut notebook = notebook::read_notebook(&file_path).context("Failed to read notebook")?;
 
     // Parse source content (may read from stdin)
     let source = common::parse_source(&args.source)?;
@@ -295,7 +301,7 @@ fn execute_file_based(args: AddCellArgs) -> Result<()> {
     notebook.cells.insert(insert_index, new_cell);
 
     // Write notebook atomically
-    notebook::write_notebook_atomic(&args.file, &notebook).context("Failed to write notebook")?;
+    notebook::write_notebook_atomic(&file_path, &notebook).context("Failed to write notebook")?;
 
     // Output result
     let cell_type_str = match args.cell_type {
@@ -305,7 +311,7 @@ fn execute_file_based(args: AddCellArgs) -> Result<()> {
     };
 
     let result = AddCellResult {
-        file: args.file.clone(),
+        file: file_path.clone(),
         cell_type: cell_type_str.to_string(),
         cell_id: cell_id.to_string(),
         index: insert_index,

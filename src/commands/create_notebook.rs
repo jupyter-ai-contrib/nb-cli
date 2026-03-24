@@ -121,7 +121,7 @@ fn create_notebook(args: &CreateArgs) -> Result<Notebook> {
         vec![Cell::Markdown {
             id: CellId::from(Uuid::new_v4()),
             metadata: empty_metadata,
-            source: vec![],  // Empty markdown cell
+            source: vec![], // Empty markdown cell
             attachments: None,
         }]
     } else {

@@ -112,14 +112,17 @@ async fn execute_with_realtime(
         _ => bail!("Expected remote execution mode"),
     };
 
+    // Normalize notebook path
+    let file_path = common::normalize_notebook_path(&args.file);
+
     // Extract notebook filename for Y.js connection
-    let notebook_filename = std::path::Path::new(&args.file)
+    let notebook_filename = std::path::Path::new(&file_path)
         .file_name()
         .and_then(|n| n.to_str())
         .context("Invalid notebook path")?;
 
     // Read notebook to find the cell
-    let notebook = notebook::read_notebook(&args.file).context("Failed to read notebook")?;
+    let notebook = notebook::read_notebook(&file_path).context("Failed to read notebook")?;
 
     // Find the target cell
     let (index, cell_id) = if let Some(ref id) = args.cell {
@@ -166,7 +169,7 @@ async fn execute_with_realtime(
 
     // Output result
     let result = UpdateCellResult {
-        file: args.file.clone(),
+        file: file_path.clone(),
         cell_id,
         index,
         updated: updates,
@@ -183,8 +186,11 @@ async fn execute_with_realtime(
 }
 
 fn execute_file_based(args: UpdateCellArgs) -> Result<()> {
+    // Normalize notebook path
+    let file_path = common::normalize_notebook_path(&args.file);
+
     // Read notebook
-    let mut notebook = notebook::read_notebook(&args.file).context("Failed to read notebook")?;
+    let mut notebook = notebook::read_notebook(&file_path).context("Failed to read notebook")?;
 
     // Find the target cell
     let (index, cell_id) = if let Some(ref id) = args.cell {
@@ -305,11 +311,11 @@ fn execute_file_based(args: UpdateCellArgs) -> Result<()> {
     }
 
     // Write notebook atomically
-    notebook::write_notebook_atomic(&args.file, &notebook).context("Failed to write notebook")?;
+    notebook::write_notebook_atomic(&file_path, &notebook).context("Failed to write notebook")?;
 
     // Output result
     let result = UpdateCellResult {
-        file: args.file.clone(),
+        file: file_path.clone(),
         cell_id,
         index,
         updated: updates,

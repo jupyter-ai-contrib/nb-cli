@@ -50,7 +50,8 @@ pub struct ReadArgs {
 }
 
 pub fn execute(args: ReadArgs) -> Result<()> {
-    let notebook = notebook::read_notebook(&args.file)?;
+    let file_path = common::normalize_notebook_path(&args.file);
+    let notebook = notebook::read_notebook(&file_path)?;
 
     // Determine format: markdown (default) or JSON
     let format = if args.json {
@@ -67,7 +68,7 @@ pub fn execute(args: ReadArgs) -> Result<()> {
         if let Some(dir) = &args.output_dir {
             Some(PathBuf::from(dir))
         } else {
-            let dir = markdown_renderer::notebook_output_dir(&args.file);
+            let dir = markdown_renderer::notebook_output_dir(&file_path);
             std::fs::create_dir_all(&dir)?;
             Some(dir)
         }

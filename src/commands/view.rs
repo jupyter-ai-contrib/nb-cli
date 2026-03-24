@@ -940,8 +940,10 @@ impl App {
 }
 
 pub fn execute(args: ViewArgs) -> Result<()> {
-    let file_path = PathBuf::from(&args.file);
-    let notebook = notebook::read_notebook(&args.file)?;
+    use crate::commands::common;
+    let normalized_path = common::normalize_notebook_path(&args.file);
+    let file_path = PathBuf::from(&normalized_path);
+    let notebook = notebook::read_notebook(&normalized_path)?;
 
     // Setup file watcher
     let (tx, rx) = mpsc::channel();
