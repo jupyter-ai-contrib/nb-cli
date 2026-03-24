@@ -480,14 +480,13 @@ fn test_workflow_create_add_execute() {
     env.run(&["execute", nb_path.to_str().unwrap()])
         .assert_success();
 
-    // Verify output
+    // Verify output (cell index 2 because create adds an empty cell at index 0)
     let result = env
         .run(&[
             "read",
             nb_path.to_str().unwrap(),
             "--cell-index",
-            "1",
-            "--with-outputs",
+            "2",
         ])
         .assert_success();
 
