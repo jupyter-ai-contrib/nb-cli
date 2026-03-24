@@ -214,8 +214,8 @@ mod tests {
 
         let result = find_project_root(&["pyproject.toml"]);
 
-        // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
+        // Restore original directory (ignore errors in cleanup)
+        let _ = std::env::set_current_dir(original_dir);
 
         assert!(result.is_ok());
         // Canonicalize both paths to handle symlinks (e.g., /var vs /private/var on macOS)
@@ -241,8 +241,8 @@ mod tests {
 
         let result = find_project_root(&["uv.lock"]);
 
-        // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
+        // Restore original directory (ignore errors in cleanup)
+        let _ = std::env::set_current_dir(original_dir);
 
         assert!(result.is_ok());
         // Canonicalize both paths to handle symlinks (e.g., /var vs /private/var on macOS)
@@ -262,8 +262,8 @@ mod tests {
 
         let result = find_project_root(&["nonexistent.toml"]);
 
-        // Restore original directory
-        std::env::set_current_dir(original_dir).unwrap();
+        // Restore original directory (ignore errors in cleanup)
+        let _ = std::env::set_current_dir(original_dir);
 
         assert!(result.is_err());
     }
