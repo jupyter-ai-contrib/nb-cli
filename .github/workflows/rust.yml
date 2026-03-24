@@ -51,16 +51,14 @@ jobs:
 
     - name: Setup test environment
       run: ./tests/setup_test_env.sh
-      continue-on-error: true
 
     - name: Build
       run: cargo build --verbose
 
-    - name: Run local mode tests
-      run: cargo test --test integration_local_mode --verbose
-
-    - name: Run execution tests
-      run: cargo test --test integration_execution --verbose
-
-    - name: Run all other tests
-      run: cargo test --bins --verbose
+    - name: Run tests
+      run: |
+        echo "Running all tests..."
+        cargo test --test integration_local_mode --verbose
+        cargo test --test integration_execution --verbose
+        cargo test --bins --verbose
+        echo "✅ All tests passed!"
