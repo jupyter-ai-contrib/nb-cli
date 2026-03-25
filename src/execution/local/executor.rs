@@ -269,7 +269,8 @@ impl ExecutionBackend for LocalExecutor {
 
         // Determine working directory
         let working_dir = self
-            .cwd.as_deref()
+            .cwd
+            .as_deref()
             .unwrap_or_else(|| std::path::Path::new("."));
 
         // Launch kernel process
@@ -331,8 +332,8 @@ impl ExecutionBackend for LocalExecutor {
 
         // Terminate kernel process
         if let Some(mut process) = self.kernel_process.take() {
-            let _ = process.kill();
-            let _ = process.wait();
+            let _ = process.kill().await;
+            let _ = process.wait().await;
         }
 
         // Clean up connection file

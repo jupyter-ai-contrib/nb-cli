@@ -314,11 +314,7 @@ impl App {
 
     #[allow(dead_code)]
     fn comment_color(&self) -> Color {
-        if self.is_dark_theme {
-            Color::Indexed(8) // Bright Black (typically gray)
-        } else {
-            Color::Indexed(8) // Same - comments should be subdued
-        }
+        Color::Indexed(8) // Bright Black (typically gray)
     }
 
     #[allow(dead_code)]
@@ -624,7 +620,7 @@ impl App {
 
         for line in markdown.lines() {
             // Handle code blocks
-            if line.starts_with("```") {
+            if let Some(after_backticks) = line.strip_prefix("```") {
                 if in_code_block {
                     // End of code block - highlight and add it
                     if !code_block_content.is_empty() {
@@ -638,7 +634,7 @@ impl App {
                 } else {
                     // Start of code block
                     in_code_block = true;
-                    code_block_language = line[3..].trim().to_string();
+                    code_block_language = after_backticks.trim().to_string();
                     if code_block_language.is_empty() {
                         code_block_language = "python".to_string();
                     }
@@ -688,7 +684,7 @@ impl App {
                     Style::default().fg(Color::Indexed(8)), // Bright Black (gray)
                 )]));
             // Block quote
-            } else if line.starts_with("> ") {
+            } else if let Some(quoted) = line.strip_prefix("> ") {
                 let quote_color = if self.is_dark_theme {
                     Color::Indexed(11)
                 } else {
@@ -696,7 +692,7 @@ impl App {
                 }; // Yellow/Blue
                 lines.push(Line::from(vec![
                     Span::styled("┃ ", Style::default().fg(quote_color)),
-                    Span::styled(line[2..].to_string(), Style::default().fg(quote_color)),
+                    Span::styled(quoted.to_string(), Style::default().fg(quote_color)),
                 ]));
             // Lists
             } else if line.starts_with("- ") || line.starts_with("* ") {
