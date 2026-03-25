@@ -234,7 +234,7 @@ fn parse_range(range: &str, max_len: usize) -> Result<(usize, usize)> {
     } else {
         let end_i32: i32 = end_str.parse().context("Invalid end index in range")?;
         if end_i32 < 0 {
-            let abs_idx = end_i32.abs() as usize;
+            let abs_idx = end_i32.unsigned_abs() as usize;
             if abs_idx > max_len {
                 bail!(
                     "Negative end index {} out of range (notebook has {} cells)",

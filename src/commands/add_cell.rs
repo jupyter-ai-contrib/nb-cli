@@ -146,7 +146,7 @@ async fn execute_with_realtime(
     // Determine insertion index
     let insert_index = if let Some(idx) = args.insert_at {
         if idx < 0 {
-            let abs_idx = idx.abs() as usize;
+            let abs_idx = idx.unsigned_abs() as usize;
             if abs_idx > notebook.cells.len() {
                 bail!(
                     "Negative index {} out of range (notebook has {} cells)",
@@ -263,7 +263,7 @@ fn execute_file_based(args: AddCellArgs) -> Result<()> {
         // Insert at specific index
         if idx < 0 {
             // Negative index: insert from end
-            let abs_idx = idx.abs() as usize;
+            let abs_idx = idx.unsigned_abs() as usize;
             if abs_idx > notebook.cells.len() {
                 bail!(
                     "Negative index {} out of range (notebook has {} cells)",

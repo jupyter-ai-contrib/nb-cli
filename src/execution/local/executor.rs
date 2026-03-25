@@ -269,9 +269,7 @@ impl ExecutionBackend for LocalExecutor {
 
         // Determine working directory
         let working_dir = self
-            .cwd
-            .as_ref()
-            .map(|p| p.as_path())
+            .cwd.as_deref()
             .unwrap_or_else(|| std::path::Path::new("."));
 
         // Launch kernel process

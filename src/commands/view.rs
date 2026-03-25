@@ -713,7 +713,7 @@ impl App {
                 .trim_start()
                 .chars()
                 .next()
-                .map_or(false, |c| c.is_numeric())
+                .is_some_and(|c| c.is_numeric())
                 && line.contains(". ")
             {
                 // Numbered list
@@ -804,7 +804,7 @@ impl App {
                             current.clear();
                         }
                         let mut italic = String::new();
-                        while let Some(ch) = chars.next() {
+                        for ch in chars.by_ref() {
                             if ch == '*' {
                                 break;
                             }
@@ -843,7 +843,7 @@ impl App {
                             current.clear();
                         }
                         let mut italic = String::new();
-                        while let Some(ch) = chars.next() {
+                        for ch in chars.by_ref() {
                             if ch == '_' {
                                 break;
                             }

@@ -118,7 +118,7 @@ fn get_kernel_dirs() -> Vec<PathBuf> {
 
     // Try to find Python site-packages kernels using jupyter_core paths
     if let Ok(output) = std::process::Command::new("python3")
-        .args(&["-c", "import jupyter_core.paths; import json; print(json.dumps(jupyter_core.paths.jupyter_path()))"])
+        .args(["-c", "import jupyter_core.paths; import json; print(json.dumps(jupyter_core.paths.jupyter_path()))"])
         .output()
     {
         if output.status.success() {
