@@ -174,9 +174,7 @@ pub fn split_source(text: &str) -> Vec<String> {
         .iter()
         .enumerate()
         .map(|(i, line)| {
-            if i < lines.len() - 1 {
-                format!("{}\n", line)
-            } else if ends_with_newline {
+            if i < lines.len() - 1 || ends_with_newline {
                 format!("{}\n", line)
             } else {
                 line.to_string()
