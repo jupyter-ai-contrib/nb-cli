@@ -11,16 +11,23 @@ pub struct ClearOutputsArgs {
     pub file: String,
 
     /// Clear specific cell by ID (stable identifier)
-    #[arg(short = 'c', long = "cell", value_name = "ID", conflicts_with_all = ["cell_index", "all"])]
+    #[arg(
+        short = 'c',
+        long = "cell",
+        value_name = "ID",
+        conflicts_with = "cell_index"
+    )]
     pub cell: Option<String>,
 
     /// Clear specific cell by index (supports negative indexing)
-    #[arg(short = 'i', long = "cell-index", value_name = "INDEX", allow_negative_numbers = true, conflicts_with_all = ["cell", "all"])]
+    #[arg(
+        short = 'i',
+        long = "cell-index",
+        value_name = "INDEX",
+        allow_negative_numbers = true,
+        conflicts_with = "cell"
+    )]
     pub cell_index: Option<i32>,
-
-    /// Clear all code cell outputs (default if no options)
-    #[arg(short = 'a', long = "all", conflicts_with_all = ["cell", "cell_index"])]
-    pub all: bool,
 
     /// Preserve execution_count (default: clear it too)
     #[arg(long = "keep-execution-count")]

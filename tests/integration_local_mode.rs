@@ -312,12 +312,7 @@ fn test_read_with_outputs() {
     let nb_path = env.copy_fixture("with_outputs.ipynb", "test.ipynb");
 
     let result = env
-        .run(&[
-            "read",
-            nb_path.to_str().unwrap(),
-            "--with-outputs",
-            "--json",
-        ])
+        .run(&["read", nb_path.to_str().unwrap(), "--json"])
         .assert_success();
 
     let json = result.json_value();
@@ -362,6 +357,20 @@ fn test_read_only_markdown() {
     for cell in cells {
         assert_eq!(cell["cell_type"], "markdown");
     }
+}
+
+#[test]
+fn test_read_only_code_and_only_markdown_conflict() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("mixed_cells.ipynb", "test.ipynb");
+
+    let result = env.run(&[
+        "read",
+        nb_path.to_str().unwrap(),
+        "--only-code",
+        "--only-markdown",
+    ]);
+    assert!(!result.success);
 }
 
 #[test]
@@ -1213,12 +1222,7 @@ fn test_clear_outputs() {
 
     // Verify outputs are cleared
     let read_result = env
-        .run(&[
-            "read",
-            nb_path.to_str().unwrap(),
-            "--with-outputs",
-            "--json",
-        ])
+        .run(&["read", nb_path.to_str().unwrap(), "--json"])
         .assert_success();
     let read_json = read_result.json_value();
     let cells = read_json["cells"].as_array().unwrap();
@@ -1713,7 +1717,7 @@ fn test_output_clear_without_extension() {
 
     // Clear outputs without extension
     let result = env
-        .run(&["output", "clear", "test", "--all", "--json"])
+        .run(&["output", "clear", "test", "--json"])
         .assert_success();
 
     assert!(result.success);

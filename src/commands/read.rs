@@ -28,10 +28,6 @@ pub struct ReadArgs {
     #[arg(long = "no-output")]
     pub no_output: bool,
 
-    /// Include cell execution outputs (deprecated - outputs shown by default)
-    #[arg(short = 'o', long = "with-outputs", conflicts_with = "no_output")]
-    pub with_outputs: bool,
-
     /// Directory for externalized output files (markdown format only)
     #[arg(long = "output-dir")]
     pub output_dir: Option<String>,
@@ -41,11 +37,11 @@ pub struct ReadArgs {
     pub limit: usize,
 
     /// Show only code cells
-    #[arg(long = "only-code", alias = "code", conflicts_with_all = ["cell", "cell_index"])]
+    #[arg(long = "only-code", alias = "code", conflicts_with_all = ["cell", "cell_index", "only_markdown"])]
     pub only_code: bool,
 
     /// Show only markdown cells
-    #[arg(long = "only-markdown", alias = "markdown-cells", conflicts_with_all = ["cell", "cell_index"])]
+    #[arg(long = "only-markdown", alias = "markdown-cells", conflicts_with_all = ["cell", "cell_index", "only_code"])]
     pub only_markdown: bool,
 }
 
