@@ -241,6 +241,7 @@ impl JupyterClient {
     }
 
     /// Delete a session
+    #[allow(dead_code)]
     pub async fn delete_session(&self, session_id: &str) -> Result<()> {
         let url = format!("{}/api/sessions/{}", self.base_url, session_id);
         let response = self

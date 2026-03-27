@@ -238,12 +238,9 @@ impl ExecutionBackend for RemoteExecutor {
             let _ = ws.close().await;
         }
 
-        // Only delete session if we created it (not if we reused an existing one)
-        if self.created_session {
-            if let (Some(client), Some(session)) = (self.client.as_ref(), self.session.as_ref()) {
-                let _ = client.delete_session(&session.id).await;
-            }
-        }
+        // Don't delete session - let it persist for reuse in subsequent executions
+        // This maintains parity with JupyterLab's behavior where sessions/kernels
+        // stay alive across multiple cell executions.
 
         Ok(())
     }

@@ -1,5 +1,4 @@
 use crate::commands::common::OutputFormat;
-use crate::execution::remote::ydoc::YDocClient;
 use crate::execution::{create_backend, types::ExecutionConfig, types::ExecutionMode};
 use crate::notebook::{read_notebook, write_notebook_atomic};
 use anyhow::{Context, Result};
@@ -229,7 +228,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         }
     }
 
-    // Stop backend
+    // Stop backend (just closes WebSocket, session persists)
     backend.stop().await?;
 
     // Update notebook cells with execution results
@@ -251,53 +250,12 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
             // Write notebook to file
             write_notebook_atomic(&file_path, &notebook).context("Failed to write notebook")?;
         }
-        ExecutionMode::Remote {
-            ref server_url,
-            ref token,
-        } => {
-            // Sync outputs to JupyterLab via Y.js
-            let notebook_path = notebook_identifier.clone();
-
-            match YDocClient::connect(server_url.clone(), token.clone(), notebook_path).await {
-                Ok(mut ydoc_client) => {
-                    // Update each executed cell's outputs and execution_count
-                    for (i, result) in &execution_results {
-                        // Update outputs
-                        if let Err(e) = ydoc_client.update_cell_outputs(*i, result.outputs.clone())
-                        {
-                            eprintln!("  Warning: Failed to update outputs for cell {}: {}", i, e);
-                        }
-
-                        // Update execution_count
-                        if let Err(e) =
-                            ydoc_client.update_cell_execution_count(*i, result.execution_count)
-                        {
-                            eprintln!(
-                                "  Warning: Failed to update execution count for cell {}: {}",
-                                i, e
-                            );
-                        }
-                    }
-
-                    // Sync changes to server
-                    match ydoc_client.sync().await {
-                        Ok(_) => {}
-                        Err(e) => {
-                            eprintln!("  Warning: Failed to sync Y.js updates: {}", e);
-                        }
-                    }
-
-                    // Close connection
-                    let _ = ydoc_client.close().await;
-                }
-                Err(e) => {
-                    eprintln!("\nWarning: Could not connect to Y.js document: {}", e);
-                    eprintln!("  Outputs will not appear in JupyterLab UI automatically.");
-                    eprintln!(
-                        "  Make sure jupyter-server-documents is installed: pip install jupyter-server-documents"
-                    );
-                }
-            }
+        ExecutionMode::Remote { .. } => {
+            // In remote mode, Jupyter Server automatically updates the Y.js document
+            // when it receives kernel execution messages. The outputs are already
+            // processed by jupyter-server-documents and will be auto-saved to disk
+            // within ~1 second (configured save_delay). No need to wait as nb-cli
+            // already has all outputs from the kernel execution.
         }
     }
 

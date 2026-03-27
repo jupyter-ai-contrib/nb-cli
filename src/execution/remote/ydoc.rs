@@ -255,6 +255,7 @@ impl YDocClient {
     }
 
     /// Update cell outputs in the Y.js document
+    #[allow(dead_code)]
     pub fn update_cell_outputs(&mut self, cell_index: usize, outputs: Vec<Output>) -> Result<()> {
         let cells_array: ArrayRef = self.doc.get_or_insert_array("cells");
         let mut txn = self.doc.transact_mut();
@@ -266,6 +267,7 @@ impl YDocClient {
     }
 
     /// Update cell execution_count in the Y.js document
+    #[allow(dead_code)]
     pub fn update_cell_execution_count(
         &mut self,
         cell_index: usize,
