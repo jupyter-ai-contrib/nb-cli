@@ -123,6 +123,15 @@ async fn execute_async(args: ConnectArgs) -> Result<()> {
         connected_at: Utc::now(),
         working_dir: Some(selected.working_dir.clone()),
         last_validated: Some(Utc::now()),
+        env_manager: match env_config.manager {
+            EnvManager::Direct => None,
+            EnvManager::Uv => Some("uv".to_string()),
+            EnvManager::Pixi => Some("pixi".to_string()),
+        },
+        project_root: env_config
+            .project_root
+            .as_ref()
+            .map(|p| p.display().to_string()),
     };
 
     // Save config
@@ -130,14 +139,32 @@ async fn execute_async(args: ConnectArgs) -> Result<()> {
     config.version = "1".to_string();
     config.connection = Some(connection);
 
-    let config_path = config.save()?;
+    let _config_path = config.save()?;
 
-    println!("\n✓ Connected to Jupyter server");
-    println!("  Server: {}", selected.url);
-    println!("  Working dir: {}", selected.working_dir);
-    println!("  Config: {}", config_path.display());
+    println!("\n✓ Connected to Jupyter server at {}", selected.url);
+    println!("  Working directory: {}", selected.working_dir);
+
+    // Show environment info if using uv or pixi
+    match env_config.manager {
+        EnvManager::Uv => {
+            println!("\n  Environment: uv");
+            if let Some(root) = &env_config.project_root {
+                println!("  Environment root: {}", root.display());
+            }
+            println!("  Python prefix: uv run");
+        }
+        EnvManager::Pixi => {
+            println!("\n  Environment: pixi");
+            if let Some(root) = &env_config.project_root {
+                println!("  Environment root: {}", root.display());
+            }
+            println!("  Python prefix: pixi run");
+        }
+        EnvManager::Direct => {}
+    }
+
     println!(
-        "\nYou can now run commands without --server and --token flags:\n  nb cell execute notebook.ipynb --cell 0"
+        "\nYou can now run commands without --server and --token flags:\n  nb execute notebook.ipynb"
     );
 
     Ok(())
@@ -166,6 +193,8 @@ async fn connect_manual(server_url: String, token: String, skip_validation: bool
         } else {
             Some(Utc::now())
         },
+        env_manager: None,
+        project_root: None,
     };
 
     // Save config
@@ -173,11 +202,9 @@ async fn connect_manual(server_url: String, token: String, skip_validation: bool
     config.version = "1".to_string();
     config.connection = Some(connection);
 
-    let config_path = config.save()?;
+    let _config_path = config.save()?;
 
-    println!("\n✓ Connected to Jupyter server");
-    println!("  Server: {}", server_url);
-    println!("  Config: {}", config_path.display());
+    println!("\n✓ Connected to Jupyter server at {}", server_url);
 
     Ok(())
 }

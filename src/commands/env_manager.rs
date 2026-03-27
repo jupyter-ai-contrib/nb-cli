@@ -13,6 +13,22 @@ pub enum EnvManager {
     Pixi,
 }
 
+impl EnvManager {
+    pub fn as_str(&self) -> &str {
+        match self {
+            EnvManager::Direct => "direct",
+            EnvManager::Uv => "uv",
+            EnvManager::Pixi => "pixi",
+        }
+    }
+}
+
+impl std::fmt::Display for EnvManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 /// Configuration for environment-aware command execution
 #[derive(Debug, Clone)]
 pub struct EnvConfig {

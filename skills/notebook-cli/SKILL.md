@@ -44,6 +44,30 @@ nb cell update notebook.ipynb --cell-index 2 --source "new code"
 nb cell add notebook.ipynb --source "print('hello')"
 ```
 
+## Running Python in the Correct Environment
+
+When connected to a Jupyter server (via `nb connect`), the server may be running in a specific Python environment (e.g., uv, pixi). To run Python scripts or commands outside the notebook in the same environment as the Jupyter kernel, use `nb status --python` to get the command prefix:
+
+```bash
+# Get the Python command prefix
+nb status --python
+# Outputs: "uv run" or "pixi run" or "" (empty for direct/system Python)
+
+# Use it to run Python scripts in the correct environment
+$(nb status --python) python script.py
+
+# This automatically expands to the correct command:
+# - uv run python script.py     (for uv environments)
+# - pixi run python script.py   (for pixi environments)
+# - python script.py            (for direct/system Python)
+
+# Examples:
+$(nb status --python) python -c "import numpy; print(numpy.__version__)"
+$(nb status --python) pip list
+```
+
+This ensures that any Python code you run has access to the same packages and environment as the Jupyter kernel.
+
 ## Create Notebook
 
 ```bash

@@ -11,6 +11,12 @@ pub struct JupyterConnection {
     pub connected_at: DateTime<Utc>,
     pub working_dir: Option<String>,
     pub last_validated: Option<DateTime<Utc>>,
+    /// Environment manager used when connecting (direct, uv, pixi)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env_manager: Option<String>,
+    /// Project root path for uv/pixi environments
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_root: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
