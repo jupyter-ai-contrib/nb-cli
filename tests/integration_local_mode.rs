@@ -41,6 +41,10 @@ impl TestEnv {
         let output = Command::new(&self.binary_path)
             .args(args)
             .current_dir(self.temp_dir.path())
+            // Set TMPDIR to the test-specific temp directory for proper test isolation.
+            // This ensures each test uses its own nb-cli output directory and prevents
+            // race conditions when tests run in parallel.
+            .env("TMPDIR", self.temp_dir.path())
             .output()
             .expect("Failed to execute command");
 
