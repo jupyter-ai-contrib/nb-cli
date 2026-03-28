@@ -203,10 +203,12 @@ impl LocalExecutor {
 #[async_trait::async_trait]
 impl ExecutionBackend for LocalExecutor {
     async fn start(&mut self) -> Result<()> {
-        // Find kernel
+        // Find kernel (with optional env-specific discovery)
         let (kernel_name, kernel_spec_path) = find_kernel(
             self.config.kernel_name.as_deref(),
             None, // Notebook kernel will be passed from command
+            self.config.env_config.as_ref(),
+            Some("execute"),
         )?;
         self.kernel_name = kernel_name.clone();
 

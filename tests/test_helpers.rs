@@ -63,15 +63,18 @@ pub fn parse_outputs(output: &str) -> Vec<Sentinel> {
 }
 
 /// Extract the @@notebook sentinel from output
+#[allow(dead_code)]
 pub fn parse_notebook_header(output: &str) -> Option<Sentinel> {
     parse_sentinels(output)
         .into_iter()
         .find(|s| s.kind == "notebook")
 }
 
+#[allow(dead_code)]
 static VENV_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 
 /// Check if uv is installed
+#[allow(dead_code)]
 pub fn has_uv() -> bool {
     Command::new("uv")
         .arg("--version")
@@ -81,6 +84,7 @@ pub fn has_uv() -> bool {
 }
 
 /// Check if Python 3 is available
+#[allow(dead_code)]
 pub fn has_python3() -> bool {
     Command::new("python3")
         .arg("--version")
@@ -91,6 +95,7 @@ pub fn has_python3() -> bool {
 
 /// Setup test virtual environment with execution dependencies
 /// Returns the path to the venv if successful
+#[allow(dead_code)]
 pub fn setup_execution_venv() -> Option<PathBuf> {
     let mutex = VENV_PATH.get_or_init(|| {
         let venv_path = initialize_venv();
@@ -100,6 +105,7 @@ pub fn setup_execution_venv() -> Option<PathBuf> {
     mutex.lock().unwrap().clone()
 }
 
+#[allow(dead_code)]
 fn initialize_venv() -> Option<PathBuf> {
     if !has_uv() || !has_python3() {
         eprintln!("⚠️  Skipping execution test setup: uv or python3 not available");
@@ -144,6 +150,7 @@ fn initialize_venv() -> Option<PathBuf> {
 }
 
 /// Set environment to use test venv for execution
+#[allow(dead_code)]
 pub fn setup_venv_environment() -> Option<String> {
     let mutex = VENV_PATH.get()?;
     let venv_path = mutex.lock().unwrap();

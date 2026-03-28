@@ -2,15 +2,25 @@ use anyhow::{anyhow, Result};
 use std::fs;
 use std::path::PathBuf;
 
+use crate::commands::env_manager::EnvConfig;
+
 /// Find a kernel specification
 ///
 /// Priority:
 /// 1. Explicit --kernel flag
 /// 2. Notebook metadata kernel
 /// 3. Default "python3" kernel
+///
+/// If env_config is provided, searches environment-specific kernels first,
+/// then falls back to global kernel discovery.
+///
+/// The `command_context` parameter is used to provide helpful error messages
+/// specific to the calling command (e.g., "create" or "execute").
 pub fn find_kernel(
     explicit_kernel: Option<&str>,
     notebook_kernel: Option<&str>,
+    env_config: Option<&EnvConfig>,
+    command_context: Option<&str>,
 ) -> Result<(String, PathBuf)> {
     // Determine which kernel to use
     let kernel_name = if let Some(kernel) = explicit_kernel {
@@ -21,25 +31,100 @@ pub fn find_kernel(
         "python3".to_string()
     };
 
-    // Try to find the kernel spec
+    // Try env-specific discovery first if env_config is provided
+    if let Some(env_config) = env_config {
+        if let Some(spec_path) = find_kernelspec_in_env(&kernel_name, env_config)? {
+            return Ok((kernel_name.clone(), spec_path));
+        }
+        // If not found in env, fall through to global discovery
+    }
+
+    // Try to find the kernel spec in global paths
     match find_kernelspec(&kernel_name) {
         Some(spec_path) => Ok((kernel_name.clone(), spec_path)),
         None => {
             // Kernel not found - provide helpful error message
-            let available = list_available_kernels();
+            let available = list_available_kernels(env_config);
             let available_str = if available.is_empty() {
                 "No kernels found.".to_string()
             } else {
-                format!("Available kernels:\n  {}", available.join("\n  "))
+                format!("Available kernels:\n- {}", available.join("\n- "))
             };
 
-            Err(anyhow!(
-                "Kernel '{}' not found.\n\n{}\n\nTo install a kernel, see: https://jupyter.readthedocs.io/en/latest/install-kernel.html",
-                kernel_name,
-                available_str
-            ))
+            // Build environment-specific suggestions based on command context
+            let env_suggestions = if env_config.is_some() {
+                // Already using --uv or --pixi, no additional suggestions needed
+                String::new()
+            } else {
+                match command_context {
+                    Some("create") => "For kernels installed in virtual environments:\n\
+                         - use `nb create --uv` for uv\n\
+                         - use `nb create --pixi` for pixi"
+                        .to_string(),
+                    Some("execute") => "For kernels installed in virtual environments:\n\
+                         - use `nb execute --uv` for uv\n\
+                         - use `nb execute --pixi` for pixi"
+                        .to_string(),
+                    _ => {
+                        // No suggestions for other contexts (e.g., tests)
+                        String::new()
+                    }
+                }
+            };
+
+            let message = if env_suggestions.is_empty() {
+                format!("Kernel '{}' not found.\n\n{}", kernel_name, available_str)
+            } else {
+                format!(
+                    "Kernel '{}' not found.\n\n{}\n\n{}",
+                    kernel_name, available_str, env_suggestions
+                )
+            };
+            Err(anyhow!(message))
         }
     }
+}
+
+/// Find a kernel specification in an environment-managed context
+///
+/// Uses `jupyter kernelspec list --json` executed via the environment manager
+/// to discover kernels installed in that environment.
+fn find_kernelspec_in_env(name: &str, env_config: &EnvConfig) -> Result<Option<PathBuf>> {
+    let mut cmd = env_config.build_jupyter_command(&["kernelspec", "list", "--json"]);
+
+    let output = match cmd.output() {
+        Ok(output) => output,
+        Err(_) => {
+            // If jupyter isn't available in the env, fall back to global discovery
+            return Ok(None);
+        }
+    };
+
+    if !output.status.success() {
+        // jupyter command failed, fall back to global discovery
+        return Ok(None);
+    }
+
+    // Parse JSON output
+    let json_str = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = match serde_json::from_str(&json_str) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+
+    // Extract kernelspecs
+    if let Some(kernelspecs) = json.get("kernelspecs").and_then(|v| v.as_object()) {
+        if let Some(spec) = kernelspecs.get(name) {
+            if let Some(resource_dir) = spec.get("resource_dir").and_then(|v| v.as_str()) {
+                let path = PathBuf::from(resource_dir);
+                if path.exists() && path.is_dir() {
+                    return Ok(Some(path));
+                }
+            }
+        }
+    }
+
+    Ok(None)
 }
 
 /// Find a kernel specification by name
@@ -54,9 +139,17 @@ fn find_kernelspec(name: &str) -> Option<PathBuf> {
 }
 
 /// List all available kernel names
-fn list_available_kernels() -> Vec<String> {
+fn list_available_kernels(env_config: Option<&EnvConfig>) -> Vec<String> {
     let mut names = Vec::new();
 
+    // Try env-specific listing first if env_config is provided
+    if let Some(env_config) = env_config {
+        if let Ok(env_kernels) = list_kernels_in_env(env_config) {
+            names.extend(env_kernels);
+        }
+    }
+
+    // Add global kernels
     for dir in get_kernel_dirs() {
         if let Ok(entries) = fs::read_dir(&dir) {
             for entry in entries.flatten() {
@@ -73,6 +166,28 @@ fn list_available_kernels() -> Vec<String> {
 
     names.sort();
     names
+}
+
+/// List kernels available in an environment
+fn list_kernels_in_env(env_config: &EnvConfig) -> Result<Vec<String>> {
+    let mut cmd = env_config.build_jupyter_command(&["kernelspec", "list", "--json"]);
+
+    let output = cmd.output()?;
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+
+    let json_str = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&json_str)?;
+
+    let mut names = Vec::new();
+    if let Some(kernelspecs) = json.get("kernelspecs").and_then(|v| v.as_object()) {
+        for (name, _) in kernelspecs {
+            names.push(name.clone());
+        }
+    }
+
+    Ok(names)
 }
 
 /// Get Jupyter kernel directories
@@ -145,7 +260,7 @@ mod tests {
     #[test]
     fn test_find_default_kernel() {
         // Should find python3 kernel (or fail gracefully)
-        match find_kernel(None, None) {
+        match find_kernel(None, None, None, None) {
             Ok((name, _path)) => {
                 assert_eq!(name, "python3");
             }
@@ -159,7 +274,7 @@ mod tests {
     #[test]
     fn test_explicit_kernel_priority() {
         // Explicit kernel should take priority
-        let result = find_kernel(Some("python3"), Some("julia"));
+        let result = find_kernel(Some("python3"), Some("julia"), None, None);
         if let Ok((name, _)) = result {
             assert_eq!(name, "python3");
         }
@@ -167,7 +282,7 @@ mod tests {
 
     #[test]
     fn test_list_kernels() {
-        let kernels = list_available_kernels();
+        let kernels = list_available_kernels(None);
         // Should find at least some kernels (if Jupyter is installed)
         println!("Found {} kernels: {:?}", kernels.len(), kernels);
     }

@@ -1,4 +1,6 @@
 use crate::commands::common::OutputFormat;
+use crate::commands::env_manager::EnvConfig;
+use crate::execution::local::discovery::find_kernel;
 use crate::notebook;
 use anyhow::{bail, Context, Result};
 use clap::Parser;
@@ -22,10 +24,6 @@ pub struct CreateArgs {
     )]
     pub kernel: String,
 
-    /// Kernel language
-    #[arg(long = "language", default_value = "python", value_name = "LANG")]
-    pub language: String,
-
     /// Create notebook with a markdown cell instead of code cell
     #[arg(long)]
     pub markdown: bool,
@@ -37,6 +35,14 @@ pub struct CreateArgs {
     /// Output in JSON format instead of text
     #[arg(long)]
     pub json: bool,
+
+    /// Use uv to discover kernel metadata
+    #[arg(long, conflicts_with = "pixi")]
+    pub uv: bool,
+
+    /// Use pixi to discover kernel metadata
+    #[arg(long, conflicts_with = "uv")]
+    pub pixi: bool,
 }
 
 #[derive(Serialize)]
@@ -53,6 +59,17 @@ pub fn execute(args: CreateArgs) -> Result<()> {
     } else {
         format!("{}.ipynb", args.file)
     };
+
+    // Validate notebook name and show warnings (but don't fail)
+    let filename = Path::new(&path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(&path);
+
+    let warnings = validate_notebook_name(filename);
+    for warning in &warnings {
+        eprintln!("Warning: {}", warning);
+    }
 
     let path_obj = Path::new(&path);
 
@@ -93,17 +110,37 @@ pub fn execute(args: CreateArgs) -> Result<()> {
 }
 
 fn create_notebook(args: &CreateArgs) -> Result<Notebook> {
-    // Create kernel spec matching Jupyter conventions
-    let display_name = match (args.language.as_str(), args.kernel.as_str()) {
-        ("python", "python3") => "Python 3 (ipykernel)".to_string(),
-        ("python", kernel) => format!("Python 3 ({})", kernel),
-        (lang, kernel) if lang == kernel => kernel.to_string(),
-        (lang, kernel) => format!("{} ({})", lang, kernel),
+    // Create environment configuration if using uv/pixi
+    let env_config = if args.uv || args.pixi {
+        Some(EnvConfig::from_flags(args.uv, args.pixi)?)
+    } else {
+        None
     };
+
+    // Find and validate the kernel exists
+    let (kernel_name, kernel_spec_path) = find_kernel(
+        Some(&args.kernel),
+        None,
+        env_config.as_ref(),
+        Some("create"),
+    )?;
+
+    // Read kernel.json from the kernelspec directory
+    let kernel_json_path = kernel_spec_path.join("kernel.json");
+    let content = std::fs::read_to_string(&kernel_json_path).context(format!(
+        "Failed to read kernel spec from {}",
+        kernel_json_path.display()
+    ))?;
+
+    // Parse the kernelspec
+    let spec = serde_json::from_str::<jupyter_protocol::JupyterKernelspec>(&content)
+        .context("Failed to parse kernel.json")?;
+
+    // Use the actual kernel metadata
     let kernelspec = KernelSpec {
-        name: args.kernel.clone(),
-        display_name,
-        language: Some(args.language.clone()),
+        name: kernel_name,
+        display_name: spec.display_name,
+        language: Some(spec.language),
         additional: HashMap::new(),
     };
 
@@ -114,7 +151,7 @@ fn create_notebook(args: &CreateArgs) -> Result<Notebook> {
         ..Default::default()
     };
 
-    // Create cells based on markdown flag
+    // Create cells based on flags
     let empty_metadata = create_empty_metadata();
 
     let cells = if args.markdown {
@@ -170,4 +207,48 @@ fn output_result(result: &CreateResult, format: &OutputFormat) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Validate notebook name and return warnings for poor practices
+fn validate_notebook_name(name: &str) -> Vec<String> {
+    let mut warnings = Vec::new();
+
+    // Check for "Untitled" pattern
+    if name.to_lowercase().contains("untitled") {
+        warnings.push(
+            "Consider using a descriptive name instead of 'Untitled' (e.g., 'data_analysis.ipynb')"
+                .to_string(),
+        );
+    }
+
+    // Check for "copy" pattern
+    if name.to_lowercase().contains("copy") {
+        warnings.push("Consider renaming from 'Copy' to a descriptive name".to_string());
+    }
+
+    // Check for special characters that may cause issues
+    let problematic_chars = ['?', '*', '<', '>', '|', ':', '"'];
+    if name.chars().any(|c| problematic_chars.contains(&c)) {
+        warnings.push(format!(
+            "Filename contains special characters that may cause issues: {}",
+            name
+        ));
+    }
+
+    // Check for spaces in filename
+    if name.contains(' ') {
+        warnings.push(
+            "Consider using underscores or hyphens instead of spaces (e.g., 'my_notebook.ipynb')"
+                .to_string(),
+        );
+    }
+
+    // Check if name is too generic
+    if name.to_lowercase() == "notebook.ipynb" || name.to_lowercase() == "test.ipynb" {
+        warnings.push(
+            "Consider using a more specific name that describes the notebook's purpose".to_string(),
+        );
+    }
+
+    warnings
 }

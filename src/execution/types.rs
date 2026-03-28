@@ -2,6 +2,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+use crate::commands::env_manager::EnvConfig;
+
 /// Execution mode: local (direct kernel) or remote (Jupyter server)
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExecutionMode {
@@ -28,6 +30,9 @@ pub struct ExecutionConfig {
 
     /// Notebook path (for remote mode session matching)
     pub notebook_path: Option<String>,
+
+    /// Environment manager configuration (for local mode kernel discovery)
+    pub env_config: Option<EnvConfig>,
 }
 
 impl Default for ExecutionConfig {
@@ -38,6 +43,7 @@ impl Default for ExecutionConfig {
             kernel_name: None,
             allow_errors: false,
             notebook_path: None,
+            env_config: None,
         }
     }
 }

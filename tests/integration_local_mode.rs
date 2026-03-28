@@ -153,15 +153,13 @@ fn test_create_with_custom_kernel() {
             "create",
             nb_path.to_str().unwrap(),
             "--kernel",
-            "python3.11",
-            "--language",
-            "python",
+            "python3",
             "--json",
         ])
         .assert_success();
 
     let json = result.json_value();
-    assert_eq!(json["kernel"], "python3.11");
+    assert_eq!(json["kernel"], "python3");
 }
 
 #[test]

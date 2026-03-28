@@ -52,6 +52,14 @@ pub struct ExecuteNotebookArgs {
     /// Output in JSON format instead of text
     #[arg(long)]
     pub json: bool,
+
+    /// Use uv to discover kernels in local mode
+    #[arg(long, conflicts_with = "pixi")]
+    pub uv: bool,
+
+    /// Use pixi to discover kernels in local mode
+    #[arg(long, conflicts_with = "uv")]
+    pub pixi: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -73,10 +81,19 @@ pub fn execute(args: ExecuteNotebookArgs) -> Result<()> {
 
 async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     use crate::commands::common;
+    use crate::commands::env_manager::EnvConfig;
+
     let format = if args.json {
         OutputFormat::Json
     } else {
         OutputFormat::Text
+    };
+
+    // Create environment configuration for local mode
+    let env_config = if args.uv || args.pixi {
+        Some(EnvConfig::from_flags(args.uv, args.pixi)?)
+    } else {
+        None
     };
 
     // Read notebook
@@ -156,14 +173,12 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         kernel_name: args.kernel.or_else(|| notebook_kernel.map(String::from)),
         allow_errors: args.allow_errors,
         notebook_path: Some(notebook_identifier.clone()),
+        env_config: env_config.clone(),
     };
 
     // Create and start backend (reuse kernel for all cells)
     let mut backend = create_backend(config)?;
-    backend
-        .start()
-        .await
-        .context("Failed to start execution backend")?;
+    backend.start().await?;
 
     // Execute cells in range and collect results
     let mut executed_count = 0;
