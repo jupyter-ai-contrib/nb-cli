@@ -183,41 +183,6 @@ jobs:
           sha256sum * > SHA256SUMS || shasum -a 256 * > SHA256SUMS
           cat SHA256SUMS
 
-      - name: Generate release notes using GitHub API
-        id: generate_changelog
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Get the previous tag
-          PREV_TAG=$(git describe --tags --abbrev=0 ${{ needs.create-tag.outputs.tag }}^ 2>/dev/null || echo "")
-
-          # Generate release notes using GitHub's native functionality
-          if [ -n "$PREV_TAG" ]; then
-            gh api \
-              --method POST \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              /repos/${{ github.repository }}/releases/generate-notes \
-              -f tag_name='${{ needs.create-tag.outputs.tag }}' \
-              -f previous_tag_name="$PREV_TAG" \
-              --jq '.body' > CHANGELOG.md
-          else
-            # For first release, use generate-notes without previous tag
-            gh api \
-              --method POST \
-              -H "Accept: application/vnd.github+json" \
-              -H "X-GitHub-Api-Version: 2022-11-28" \
-              /repos/${{ github.repository }}/releases/generate-notes \
-              -f tag_name='${{ needs.create-tag.outputs.tag }}' \
-              --jq '.body' > CHANGELOG.md
-          fi
-
-          # Append checksums note
-          echo "" >> CHANGELOG.md
-          echo "---" >> CHANGELOG.md
-          echo "" >> CHANGELOG.md
-          echo "See \`SHA256SUMS\` for checksums to verify downloads." >> CHANGELOG.md
-
       - name: Create Draft Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -225,7 +190,7 @@ jobs:
           gh release create ${{ needs.create-tag.outputs.tag }} \
             --draft \
             --title "${{ needs.create-tag.outputs.tag }}" \
-            --notes-file CHANGELOG.md \
+            --generate-notes \
             release-assets/*
 
       - name: Summary
