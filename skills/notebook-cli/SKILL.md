@@ -237,8 +237,8 @@ nb execute notebook.ipynb -i 0 --server http://localhost:8888 --token "token123"
 ## Clear Outputs
 
 ```bash
-# Clear all outputs
-nb output clear notebook.ipynb --all
+# Clear all outputs (default behavior)
+nb output clear notebook.ipynb
 
 # Clear specific cell by index
 nb output clear notebook.ipynb --cell-index 0
@@ -249,14 +249,14 @@ nb output clear notebook.ipynb --cell "abc123"
 nb output clear notebook.ipynb -c "abc123"
 
 # Preserve execution count when clearing
-nb output clear notebook.ipynb --all --keep-execution-count
+nb output clear notebook.ipynb --keep-execution-count
 ```
 
 ## Delete Outputs
 
 ```bash
 # Same as clear - use output clear command
-nb output clear notebook.ipynb --all
+nb output clear notebook.ipynb
 nb output clear notebook.ipynb -i 0
 ```
 

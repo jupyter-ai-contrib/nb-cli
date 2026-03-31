@@ -1,6 +1,6 @@
 [package]
 name = "nb-cli"
-version = "0.0.4"
+version = "0.0.5"
 edition = "2021"
 description = "A command-line tool for reading, writing, and executing Jupyter notebooks"
 authors = ["Project Jupyter <jupyter@googlegroups.com>"]

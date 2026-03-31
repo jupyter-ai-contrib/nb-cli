@@ -48,7 +48,7 @@ pub fn is_binary_mime_type(mime: &str) -> bool {
 /// Normalize a cell index, supporting negative indexing (e.g., -1 for last cell)
 pub fn normalize_index(index: i32, len: usize) -> Result<usize> {
     if index < 0 {
-        let abs_index = index.abs() as usize;
+        let abs_index = index.unsigned_abs() as usize;
         if abs_index > len {
             bail!(
                 "Negative index {} out of range (notebook has {} cells)",
@@ -174,9 +174,7 @@ pub fn split_source(text: &str) -> Vec<String> {
         .iter()
         .enumerate()
         .map(|(i, line)| {
-            if i < lines.len() - 1 {
-                format!("{}\n", line)
-            } else if ends_with_newline {
+            if i < lines.len() - 1 || ends_with_newline {
                 format!("{}\n", line)
             } else {
                 line.to_string()

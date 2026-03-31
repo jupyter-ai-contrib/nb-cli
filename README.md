@@ -106,6 +106,9 @@ When the user asks to read, edit, execute, or work with .ipynb files, use the no
 
 This ensures your AI agent uses the `nb` CLI for all notebook operations instead of attempting to parse JSON directly.
 
+> [!IMPORTANT]
+> For Codex, `nb` must be allowed by Codex command rules, or the sandbox may block the command in `connect` mode. You can do this by adding `prefix_rule(pattern=["nb"], decision="allow")` to your `default.rules` file usually located at `~/.codex/rules/default.rules`. 
+
 ## Quick Start
 
 ```bash

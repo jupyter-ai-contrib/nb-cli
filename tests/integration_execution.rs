@@ -212,13 +212,7 @@ fn test_execute_notebook_preserves_state() {
 
     // Verify the output from the last cell
     let result = env
-        .run(&[
-            "read",
-            nb_path.to_str().unwrap(),
-            "--cell-index",
-            "2",
-            "--with-outputs",
-        ])
+        .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "2"])
         .assert_success();
 
     assert!(result.stdout.contains("Result: 52"));
@@ -519,13 +513,7 @@ fn test_workflow_modify_and_reexecute() {
 
     // Verify the new value propagated
     let result = env
-        .run(&[
-            "read",
-            nb_path.to_str().unwrap(),
-            "--cell-index",
-            "2",
-            "--with-outputs",
-        ])
+        .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "2"])
         .assert_success();
 
     // Should show Result: 110 instead of Result: 52
@@ -550,13 +538,7 @@ fn test_execute_with_relative_paths() {
 
     // Verify the file was loaded successfully
     let result = env
-        .run(&[
-            "read",
-            nb_path.to_str().unwrap(),
-            "--cell-index",
-            "0",
-            "--with-outputs",
-        ])
+        .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "0"])
         .assert_success();
 
     // Check that it loaded the file and printed the expected output

@@ -118,7 +118,7 @@ impl KernelWebSocket {
         let header_size = 8 + (offset_count * 8);
 
         let mut offsets = Vec::new();
-        let mut offset = header_size as u64;
+        let mut offset = header_size;
 
         // Offset for channel start
         offsets.push(offset);
@@ -217,7 +217,7 @@ impl KernelWebSocket {
             match self.read.next().await {
                 Some(Ok(Message::Text(text))) => {
                     let msg: JupyterMessage = serde_json::from_str(&text)
-                        .with_context(|| format!("Failed to parse text message"))?;
+                        .with_context(|| "Failed to parse text message".to_string())?;
                     return Ok(Some(msg));
                 }
                 Some(Ok(Message::Binary(data))) => {
