@@ -75,11 +75,9 @@ async fn execute_with_realtime(
     // Normalize notebook path
     let file_path = common::normalize_notebook_path(&args.file);
 
-    // Extract notebook filename for Y.js connection
-    let notebook_filename = std::path::Path::new(&file_path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .context("Invalid notebook path")?;
+    // Compute notebook path relative to server root for Y.js connection
+    let server_root = common::resolve_server_root();
+    let notebook_server_path = common::notebook_path_for_server(&file_path, server_root.as_deref());
 
     // Read notebook to calculate which cells to delete
     let notebook = notebook::read_notebook(&file_path).context("Failed to read notebook")?;
@@ -122,9 +120,14 @@ async fn execute_with_realtime(
     let remaining_cells = notebook.cells.len() - cells_deleted;
 
     // Delete cells via Y.js (don't write to file - let JupyterLab handle persistence)
-    ydoc_notebook_ops::ydoc_delete_cells(&server_url, &token, notebook_filename, &sorted_indices)
-        .await
-        .context("Error deleting cells")?;
+    ydoc_notebook_ops::ydoc_delete_cells(
+        &server_url,
+        &token,
+        &notebook_server_path,
+        &sorted_indices,
+    )
+    .await
+    .context("Error deleting cells")?;
 
     // Output result
     let result = DeleteCellResult {

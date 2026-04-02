@@ -136,14 +136,12 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         .context("Notebook path contains invalid UTF-8")?
         .to_string();
 
-    // For remote mode, extract just the filename for session matching
+    // For remote mode, compute path relative to server root so that
+    // notebooks with the same name in different directories get distinct sessions.
     let notebook_identifier =
         if matches!(mode, crate::execution::types::ExecutionMode::Remote { .. }) {
-            std::path::Path::new(&file_path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(String::from)
-                .unwrap_or(notebook_path_str.clone())
+            let server_root = common::resolve_server_root();
+            common::notebook_path_for_server(&file_path, server_root.as_deref())
         } else {
             // For local mode, use full absolute path
             notebook_path_str.clone()

@@ -115,11 +115,9 @@ async fn execute_with_realtime(
     // Normalize notebook path
     let file_path = common::normalize_notebook_path(&args.file);
 
-    // Extract notebook filename for Y.js connection
-    let notebook_filename = std::path::Path::new(&file_path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .context("Invalid notebook path")?;
+    // Compute notebook path relative to server root for Y.js connection
+    let server_root = common::resolve_server_root();
+    let notebook_server_path = common::notebook_path_for_server(&file_path, server_root.as_deref());
 
     // Read notebook to find the cell
     let notebook = notebook::read_notebook(&file_path).context("Failed to read notebook")?;
@@ -159,7 +157,7 @@ async fn execute_with_realtime(
     ydoc_notebook_ops::ydoc_update_cell(
         &server_url,
         &token,
-        notebook_filename,
+        &notebook_server_path,
         index,
         new_source.as_deref(),
         append_source.as_deref(),

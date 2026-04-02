@@ -232,6 +232,42 @@ pub fn resolve_execution_mode(
     }
 }
 
+/// Get the Jupyter server root directory from saved connection config.
+/// Returns None for manual connections or when no config exists.
+pub fn resolve_server_root() -> Option<String> {
+    Config::load()
+        .ok()
+        .and_then(|c| c.connection)
+        .and_then(|c| c.working_dir)
+}
+
+/// Compute a notebook path relative to the Jupyter server root.
+///
+/// The Jupyter Server identifies notebooks by their path relative to the
+/// server's root directory. This function canonicalizes the given file path
+/// and strips the server root prefix to produce that relative path.
+///
+/// Falls back to the user-provided path when the server root is unknown
+/// (manual connections) or when the notebook is outside the server root.
+pub fn notebook_path_for_server(file_path: &str, server_root: Option<&str>) -> String {
+    let Some(root) = server_root else {
+        return file_path.to_string();
+    };
+
+    let Ok(abs) = std::fs::canonicalize(file_path) else {
+        return file_path.to_string();
+    };
+
+    let Ok(root_canon) = std::fs::canonicalize(root) else {
+        return file_path.to_string();
+    };
+
+    abs.strip_prefix(&root_canon)
+        .ok()
+        .and_then(|rel| rel.to_str().map(String::from))
+        .unwrap_or_else(|| file_path.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
