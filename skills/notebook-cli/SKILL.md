@@ -78,7 +78,7 @@ nb create notebook.ipynb
 nb create notebook.ipynb --markdown
 
 # Create with specific kernel
-nb create notebook.ipynb --kernel python3 --language python
+nb create notebook.ipynb --kernel python3
 
 # Force overwrite if exists
 nb create notebook.ipynb --force
