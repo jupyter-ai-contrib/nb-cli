@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 /// Jupyter Server REST API client
 pub struct JupyterClient {
@@ -165,7 +166,7 @@ impl JupyterClient {
         let url = format!("{}/api/sessions", self.base_url);
         let payload = CreateSessionRequest {
             path: notebook_path.to_string(),
-            name: notebook_path.to_string(),
+            name: filename_from_path(notebook_path),
             r#type: "notebook".to_string(),
             kernel: KernelSpec {
                 id: Some(kernel_id.to_string()),
@@ -209,7 +210,7 @@ impl JupyterClient {
         let url = format!("{}/api/sessions", self.base_url);
         let payload = CreateSessionRequest {
             path: notebook_path.to_string(),
-            name: notebook_path.to_string(),
+            name: filename_from_path(notebook_path),
             r#type: "notebook".to_string(),
             kernel: KernelSpec {
                 id: None,
@@ -306,4 +307,12 @@ impl JupyterClient {
             )
         }
     }
+}
+
+fn filename_from_path(notebook_path: &str) -> String {
+    Path::new(notebook_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(notebook_path)
+        .to_string()
 }
