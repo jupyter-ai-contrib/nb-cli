@@ -26,6 +26,9 @@ pub enum OutputFormat {
 // AI-Optimized Markdown format constants
 pub const AI_NOTEBOOK_FORMAT: &str = "ai-notebook";
 
+/// Default maximum characters for inline output before externalization
+pub const DEFAULT_INLINE_LIMIT: usize = 4000;
+
 /// Normalize notebook path by adding .ipynb extension if missing
 /// This allows users to omit the .ipynb extension for convenience
 pub fn normalize_notebook_path(path: &str) -> String {
@@ -188,6 +191,26 @@ pub fn split_source(text: &str) -> Vec<String> {
     }
 
     result
+}
+
+/// Serialize notebook cells to JSON values with an `index` field added to each.
+/// When `include_outputs` is false, the `outputs` field is stripped from code cells.
+/// Used by both `read` and `execute` commands for consistent JSON output.
+pub fn serialize_cells_json(cells: &[Cell], include_outputs: bool) -> Vec<serde_json::Value> {
+    cells
+        .iter()
+        .enumerate()
+        .map(|(index, cell)| {
+            let mut cell_json = serde_json::to_value(cell).unwrap_or(serde_json::json!(null));
+            if let Some(obj) = cell_json.as_object_mut() {
+                obj.insert("index".to_string(), serde_json::json!(index));
+                if !include_outputs {
+                    obj.remove("outputs");
+                }
+            }
+            cell_json
+        })
+        .collect()
 }
 
 /// Convert cell source to a single string

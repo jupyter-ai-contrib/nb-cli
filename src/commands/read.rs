@@ -32,8 +32,8 @@ pub struct ReadArgs {
     #[arg(long = "output-dir")]
     pub output_dir: Option<String>,
 
-    /// Maximum characters for inline output (default: 4000). Outputs exceeding this are externalized to files
-    #[arg(long, default_value = "4000")]
+    /// Maximum characters for inline output. Outputs exceeding this are externalized to files
+    #[arg(long, default_value_t = common::DEFAULT_INLINE_LIMIT)]
     pub limit: usize,
 
     /// Show only code cells
@@ -256,20 +256,7 @@ fn output_notebook_structure(
                 print!("{}", markdown);
             }
             OutputFormat::Json => {
-                let cells: Vec<serde_json::Value> = notebook
-                    .cells
-                    .iter()
-                    .enumerate()
-                    .map(|(index, cell)| {
-                        let mut cell_json = serde_json::to_value(cell).unwrap_or(json!(null));
-
-                        if let Some(obj) = cell_json.as_object_mut() {
-                            obj.insert("index".to_string(), json!(index));
-                        }
-
-                        cell_json
-                    })
-                    .collect();
+                let cells = common::serialize_cells_json(&notebook.cells, true);
                 let output = json!({ "cells": cells });
                 println!("{}", serde_json::to_string_pretty(&output)?);
             }
@@ -285,21 +272,7 @@ fn output_notebook_structure(
             print!("{}", markdown);
         }
         OutputFormat::Json => {
-            let cells: Vec<serde_json::Value> = notebook
-                .cells
-                .iter()
-                .enumerate()
-                .map(|(index, cell)| {
-                    let mut cell_json = serde_json::to_value(cell).unwrap_or(json!(null));
-
-                    if let Some(obj) = cell_json.as_object_mut() {
-                        obj.insert("index".to_string(), json!(index));
-                        obj.remove("outputs");
-                    }
-
-                    cell_json
-                })
-                .collect();
+            let cells = common::serialize_cells_json(&notebook.cells, false);
 
             // Count cell types for summary
             let mut code_cells = 0;
