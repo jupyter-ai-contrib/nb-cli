@@ -119,10 +119,6 @@ impl CommandResult {
         }
         self
     }
-
-    fn contains(&self, text: &str) -> bool {
-        self.stdout.contains(text) || self.stderr.contains(text)
-    }
 }
 
 // ==================== EXECUTION TESTS ====================
@@ -140,7 +136,11 @@ fn test_execute_single_cell() {
         .run(&["execute", nb_path.to_str().unwrap(), "--cell-index", "0"])
         .assert_success();
 
-    assert!(result.contains("executed") || result.contains("success"));
+    // Execute now returns notebook markdown on stdout
+    assert!(
+        test_helpers::parse_notebook_header(&result.stdout).is_some(),
+        "Execute stdout should contain @@notebook header"
+    );
 }
 
 #[test]
@@ -153,30 +153,36 @@ fn test_execute_cell_with_output() {
     let nb_path = env.copy_fixture("for_execution.ipynb", "test.ipynb");
 
     // Execute entire notebook so cell 2 can print the result
-    env.run(&["execute", nb_path.to_str().unwrap()])
+    let exec_result = env
+        .run(&["execute", nb_path.to_str().unwrap()])
         .assert_success();
 
-    // Verify output was captured from cell 2 (which has print statement)
+    // Verify output directly in execute stdout
+    let outputs = test_helpers::parse_outputs(&exec_result.stdout);
+    assert!(
+        !outputs.is_empty(),
+        "Execute stdout should contain @@output sentinels"
+    );
+    assert!(
+        exec_result.stdout.contains("Result: 52"),
+        "Execute stdout should contain the print output"
+    );
+
+    // Persistence check: verify via nb read that outputs were saved
     let result = env
         .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "2"])
         .assert_success();
 
-    // Parse the markdown output for deep validation
     let cells = test_helpers::parse_cells(&result.stdout);
     assert_eq!(cells.len(), 1);
     assert_eq!(cells[0].get_str("cell_type"), Some("code"));
 
-    let outputs = test_helpers::parse_outputs(&result.stdout);
+    let read_outputs = test_helpers::parse_outputs(&result.stdout);
     assert!(
-        !outputs.is_empty(),
+        !read_outputs.is_empty(),
         "Cell should have outputs after execution"
     );
-    assert!(
-        outputs[0].get_str("output_type").is_some(),
-        "Output should have output_type"
-    );
 
-    // Verify the actual output content
     assert!(result.stdout.contains("Result: 52"));
 }
 
@@ -194,7 +200,10 @@ fn test_execute_cell_by_id() {
         .run(&["execute", nb_path.to_str().unwrap(), "--cell", "cell-1"])
         .assert_success();
 
-    assert!(result.contains("executed") || result.contains("success"));
+    assert!(
+        test_helpers::parse_notebook_header(&result.stdout).is_some(),
+        "Execute stdout should contain @@notebook header"
+    );
 }
 
 #[test]
@@ -207,10 +216,17 @@ fn test_execute_notebook_preserves_state() {
     let nb_path = env.copy_fixture("for_execution.ipynb", "test.ipynb");
 
     // Execute entire notebook to preserve state across cells
-    env.run(&["execute", nb_path.to_str().unwrap()])
+    let exec_result = env
+        .run(&["execute", nb_path.to_str().unwrap()])
         .assert_success();
 
-    // Verify the output from the last cell
+    // Verify output directly in execute stdout
+    assert!(
+        exec_result.stdout.contains("Result: 52"),
+        "Execute stdout should contain the computed result"
+    );
+
+    // Persistence check: verify via nb read
     let result = env
         .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "2"])
         .assert_success();
@@ -227,22 +243,13 @@ fn test_execute_entire_notebook() {
 
     let nb_path = env.copy_fixture("for_execution.ipynb", "test.ipynb");
 
-    let result = env
+    let exec_result = env
         .run(&["execute", nb_path.to_str().unwrap()])
         .assert_success();
 
-    assert!(
-        result.contains("executed") || result.contains("Executed") || result.contains("success")
-    );
-
-    // Verify all cells have execution counts
-    let read_result = env
-        .run(&["read", nb_path.to_str().unwrap()])
-        .assert_success();
-
-    // Parse cells and verify execution counts were set
-    let cells = test_helpers::parse_cells(&read_result.stdout);
-    assert!(!cells.is_empty(), "Should have cells");
+    // Parse cells directly from execute stdout and verify execution counts
+    let cells = test_helpers::parse_cells(&exec_result.stdout);
+    assert!(!cells.is_empty(), "Should have cells in execute stdout");
 
     let code_cells: Vec<_> = cells
         .iter()
@@ -255,6 +262,23 @@ fn test_execute_entire_notebook() {
             cell.get_i64("execution_count").is_some(),
             "Code cell at index {:?} should have execution_count after full notebook execution",
             cell.get_i64("index")
+        );
+    }
+
+    // Persistence check: verify via nb read
+    let read_result = env
+        .run(&["read", nb_path.to_str().unwrap()])
+        .assert_success();
+
+    let read_cells = test_helpers::parse_cells(&read_result.stdout);
+    let read_code_cells: Vec<_> = read_cells
+        .iter()
+        .filter(|c| c.get_str("cell_type") == Some("code"))
+        .collect();
+    for cell in &read_code_cells {
+        assert!(
+            cell.get_i64("execution_count").is_some(),
+            "Persisted code cell should have execution_count"
         );
     }
 }
@@ -289,9 +313,22 @@ fn test_execute_with_error() {
 
     let nb_path = env.copy_fixture("with_error.ipynb", "test.ipynb");
 
-    // Should fail without --allow-errors
-    env.run(&["execute", nb_path.to_str().unwrap()])
+    // Should fail without --allow-errors but still output notebook content
+    let result = env
+        .run(&["execute", nb_path.to_str().unwrap()])
         .assert_failure();
+
+    // Verify partial results appear in stdout despite failure
+    assert!(
+        test_helpers::parse_notebook_header(&result.stdout).is_some(),
+        "Failed execute should still output @@notebook header"
+    );
+
+    let outputs = test_helpers::parse_outputs(&result.stdout);
+    assert!(
+        !outputs.is_empty(),
+        "Failed execute should include outputs (error or successful cells)"
+    );
 }
 
 #[test]
@@ -306,18 +343,40 @@ fn test_execute_with_allow_errors() {
     // Execute with --allow-errors (still exits with error code but updates notebook)
     let result = env.run(&["execute", nb_path.to_str().unwrap(), "--allow-errors"]);
 
-    // Command fails but should show it executed cells
-    assert!(result.contains("Executed") || result.contains("completed"));
+    // Summary goes to stderr
+    assert!(
+        result.stderr.contains("Executed") || result.stderr.contains("completed"),
+        "Summary should appear on stderr"
+    );
 
-    // Verify first cell executed successfully
+    // Stdout should contain notebook markdown with outputs from both cells
+    assert!(
+        test_helpers::parse_notebook_header(&result.stdout).is_some(),
+        "Should have @@notebook header in stdout"
+    );
+
+    let cells = test_helpers::parse_cells(&result.stdout);
+    let code_cells: Vec<_> = cells
+        .iter()
+        .filter(|c| c.get_str("cell_type") == Some("code"))
+        .collect();
+    assert!(
+        !code_cells.is_empty(),
+        "Should have code cells in execute output"
+    );
+
+    // First cell should have execution_count (it succeeded)
+    assert!(
+        code_cells[0].get_i64("execution_count").is_some(),
+        "First code cell should have execution_count"
+    );
+
+    // Persistence check
     let read_result = env
         .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "0"])
         .assert_success();
 
-    assert!(
-        read_result.stdout.contains("Execution count:")
-            || read_result.stdout.contains("execution_count")
-    );
+    assert!(read_result.stdout.contains("execution_count"));
 }
 
 #[test]
@@ -378,9 +437,16 @@ fn test_execute_last_cell_with_negative_index() {
         .run(&["execute", nb_path.to_str().unwrap(), "--cell-index", "-1"])
         .assert_success();
 
-    assert!(result.contains("executed") || result.contains("success"));
-    // The execute command outputs summary info, not specific cell index
-    assert!(result.contains("Executed: 1"));
+    // Execute stdout should contain notebook markdown
+    assert!(
+        test_helpers::parse_notebook_header(&result.stdout).is_some(),
+        "Execute stdout should contain @@notebook header"
+    );
+    // Summary on stderr
+    assert!(
+        result.stderr.contains("Executed: 1"),
+        "Summary should show 1 executed cell on stderr"
+    );
 }
 
 #[test]
@@ -431,8 +497,14 @@ fn test_execute_json_format() {
         ])
         .assert_success();
 
-    // Should output valid JSON
-    assert!(serde_json::from_str::<serde_json::Value>(&result.stdout).is_ok());
+    // Should output valid JSON with cells and summary
+    let json: serde_json::Value =
+        serde_json::from_str(&result.stdout).expect("Should output valid JSON");
+    assert!(
+        json.get("success").is_some(),
+        "JSON should have success field"
+    );
+    assert!(json.get("cells").is_some(), "JSON should have cells array");
 }
 
 // ==================== WORKFLOW TESTS ====================
@@ -471,10 +543,17 @@ fn test_workflow_create_add_execute() {
     .assert_success();
 
     // Execute entire notebook to preserve state
-    env.run(&["execute", nb_path.to_str().unwrap()])
+    let exec_result = env
+        .run(&["execute", nb_path.to_str().unwrap()])
         .assert_success();
 
-    // Verify output (cell index 2 because create adds an empty cell at index 0)
+    // Verify output directly in execute stdout
+    assert!(
+        exec_result.stdout.contains("Answer: 4"),
+        "Execute stdout should contain the computed answer"
+    );
+
+    // Persistence check (cell index 2 because create adds an empty cell at index 0)
     let result = env
         .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "2"])
         .assert_success();
@@ -508,15 +587,21 @@ fn test_workflow_modify_and_reexecute() {
     .assert_success();
 
     // Re-execute the notebook
-    env.run(&["execute", nb_path.to_str().unwrap()])
+    let exec_result = env
+        .run(&["execute", nb_path.to_str().unwrap()])
         .assert_success();
 
-    // Verify the new value propagated
+    // Verify the new value directly in execute stdout
+    assert!(
+        exec_result.stdout.contains("Result: 110"),
+        "Execute stdout should show Result: 110 after modifying x to 100"
+    );
+
+    // Persistence check
     let result = env
         .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "2"])
         .assert_success();
 
-    // Should show Result: 110 instead of Result: 52
     assert!(result.stdout.contains("Result: 110"));
 }
 
@@ -543,4 +628,160 @@ fn test_execute_with_relative_paths() {
 
     // Check that it loaded the file and printed the expected output
     assert!(result.stdout.contains("Hello from relative path!"));
+}
+
+// ==================== OUTPUT FORMAT TESTS ====================
+
+#[test]
+fn test_execute_output_matches_read() {
+    let Some(env) = TestEnv::new() else {
+        eprintln!("⚠️  Skipping test: execution environment not available");
+        return;
+    };
+
+    let nb_path = env.copy_fixture("for_execution.ipynb", "test.ipynb");
+
+    // Execute notebook — stdout should be notebook markdown
+    let exec_result = env
+        .run(&["execute", nb_path.to_str().unwrap()])
+        .assert_success();
+
+    // Read the same notebook — stdout should match execute
+    let read_result = env
+        .run(&["read", nb_path.to_str().unwrap()])
+        .assert_success();
+
+    // Both should produce the same notebook markdown format
+    // Compare sentinel structure (headers, cells, outputs) rather than byte-for-byte
+    // since output dir paths may differ
+    let exec_cells = test_helpers::parse_cells(&exec_result.stdout);
+    let read_cells = test_helpers::parse_cells(&read_result.stdout);
+    assert_eq!(
+        exec_cells.len(),
+        read_cells.len(),
+        "Execute and read should produce the same number of cells"
+    );
+
+    let exec_outputs = test_helpers::parse_outputs(&exec_result.stdout);
+    let read_outputs = test_helpers::parse_outputs(&read_result.stdout);
+    assert_eq!(
+        exec_outputs.len(),
+        read_outputs.len(),
+        "Execute and read should produce the same number of outputs"
+    );
+
+    // Verify output types match
+    for (exec_out, read_out) in exec_outputs.iter().zip(read_outputs.iter()) {
+        assert_eq!(
+            exec_out.get_str("output_type"),
+            read_out.get_str("output_type"),
+            "Output types should match between execute and read"
+        );
+    }
+}
+
+#[test]
+fn test_execute_error_shows_partial_results_and_error() {
+    let Some(env) = TestEnv::new() else {
+        eprintln!("⚠️  Skipping test: execution environment not available");
+        return;
+    };
+
+    let nb_path = env.copy_fixture("with_error.ipynb", "test.ipynb");
+
+    // Execute without --allow-errors: cell-1 (valid_code = 123) succeeds, cell-2 (undefined_variable) fails
+    let result = env
+        .run(&["execute", nb_path.to_str().unwrap()])
+        .assert_failure();
+
+    // Stdout should contain notebook markdown with partial results
+    assert!(
+        test_helpers::parse_notebook_header(&result.stdout).is_some(),
+        "Should have @@notebook header despite failure"
+    );
+
+    // Cell-1 should have execution_count (it ran successfully)
+    let cells = test_helpers::parse_cells(&result.stdout);
+    let code_cells: Vec<_> = cells
+        .iter()
+        .filter(|c| c.get_str("cell_type") == Some("code"))
+        .collect();
+    assert!(
+        code_cells.len() >= 2,
+        "Should have at least 2 code cells in output"
+    );
+    assert!(
+        code_cells[0].get_i64("execution_count").is_some(),
+        "First code cell should have execution_count (it succeeded)"
+    );
+
+    // Cell-2 should have an error output
+    let outputs = test_helpers::parse_outputs(&result.stdout);
+    let error_outputs: Vec<_> = outputs
+        .iter()
+        .filter(|o| o.get_str("output_type") == Some("error"))
+        .collect();
+    assert!(
+        !error_outputs.is_empty(),
+        "Should have an error output from the failed cell"
+    );
+    assert_eq!(
+        error_outputs[0].get_str("ename"),
+        Some("NameError"),
+        "Error should be a NameError"
+    );
+
+    // Persistence check: partial results should be saved
+    let read_result = env
+        .run(&["read", nb_path.to_str().unwrap()])
+        .assert_success();
+
+    let read_cells = test_helpers::parse_cells(&read_result.stdout);
+    let read_code_cells: Vec<_> = read_cells
+        .iter()
+        .filter(|c| c.get_str("cell_type") == Some("code"))
+        .collect();
+    assert!(
+        read_code_cells[0].get_i64("execution_count").is_some(),
+        "Persisted first cell should have execution_count"
+    );
+}
+
+#[test]
+fn test_execute_json_includes_outputs() {
+    let Some(env) = TestEnv::new() else {
+        eprintln!("⚠️  Skipping test: execution environment not available");
+        return;
+    };
+
+    let nb_path = env.copy_fixture("for_execution.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["execute", nb_path.to_str().unwrap(), "--json"])
+        .assert_success();
+
+    let json: serde_json::Value =
+        serde_json::from_str(&result.stdout).expect("Should output valid JSON");
+
+    // Verify summary fields
+    assert_eq!(json["success"], true);
+    assert!(json["executed_cells"].as_u64().unwrap() > 0);
+
+    // Verify cells array has outputs
+    let cells = json["cells"].as_array().expect("Should have cells array");
+    let code_cells: Vec<_> = cells.iter().filter(|c| c["cell_type"] == "code").collect();
+
+    // Last code cell (print) should have outputs
+    let last_cell = code_cells.last().expect("Should have code cells");
+    let outputs = last_cell["outputs"]
+        .as_array()
+        .expect("Last code cell should have outputs");
+    assert!(!outputs.is_empty(), "Should have at least one output");
+
+    // Verify the actual output content contains the computed result
+    let output_text = serde_json::to_string(outputs).unwrap();
+    assert!(
+        output_text.contains("Result: 52"),
+        "Output should contain 'Result: 52'"
+    );
 }

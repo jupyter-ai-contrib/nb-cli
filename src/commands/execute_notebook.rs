@@ -1,10 +1,11 @@
-use crate::commands::common::OutputFormat;
+use crate::commands::common::{self, OutputFormat};
+use crate::commands::markdown_renderer;
 use crate::execution::{create_backend, types::ExecutionConfig, types::ExecutionMode};
 use crate::notebook::{read_notebook, write_notebook_atomic};
 use anyhow::{Context, Result};
 use clap::Args;
 use nbformat::v4::Cell;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -62,12 +63,13 @@ pub struct ExecuteNotebookArgs {
     pub pixi: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 pub struct ExecuteNotebookResult {
     success: bool,
     total_cells: usize,
     executed_cells: usize,
     failed_cells: usize,
+    cells: Vec<serde_json::Value>,
 }
 
 pub fn execute(args: ExecuteNotebookArgs) -> Result<()> {
@@ -80,7 +82,6 @@ pub fn execute(args: ExecuteNotebookArgs) -> Result<()> {
 }
 
 async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
-    use crate::commands::common;
     use crate::commands::env_manager::EnvConfig;
 
     let format = if args.json {
@@ -227,8 +228,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
 
                     // Stop on error unless --allow-errors
                     if !args.allow_errors {
-                        backend.stop().await?;
-                        anyhow::bail!("Execution stopped at cell {} due to error", i);
+                        break;
                     }
                 } else if !matches!(format, OutputFormat::Json) {
                     eprintln!("  ✓ Cell {} completed", code_cell_num);
@@ -272,38 +272,54 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         }
     }
 
-    // Output result
-    let output_result = ExecuteNotebookResult {
-        success: failed_count == 0,
-        total_cells: end_idx - start_idx + 1,
-        executed_cells: executed_count,
-        failed_cells: failed_count,
-    };
+    // Compute result summary
+    let success = failed_count == 0;
+    let total_cells = end_idx - start_idx + 1;
 
+    // Output summary to stderr (diagnostics)
+    eprintln!("\n{}", "=".repeat(50));
+    if success {
+        eprintln!("✓ Notebook executed successfully");
+    } else {
+        eprintln!("✗ Notebook execution completed with errors");
+    }
+    eprintln!("Total cells in range: {}", total_cells);
+    eprintln!("Executed: {}", executed_count);
+    eprintln!("Failed: {}", failed_count);
+
+    if matches!(mode, ExecutionMode::Local) {
+        eprintln!("\nNotebook updated: {}", file_path);
+    } else {
+        eprintln!("\n(Executed via Jupyter Server)");
+    }
+
+    // Output notebook content to stdout (data)
     match format {
         OutputFormat::Json => {
+            let cells = common::serialize_cells_json(&notebook.cells, true);
+            let output_result = ExecuteNotebookResult {
+                success,
+                total_cells,
+                executed_cells: executed_count,
+                failed_cells: failed_count,
+                cells,
+            };
             println!("{}", serde_json::to_string_pretty(&output_result)?);
         }
         OutputFormat::Text | OutputFormat::Markdown => {
-            println!("\n{}", "=".repeat(50));
-            if output_result.success {
-                println!("✓ Notebook executed successfully");
-            } else {
-                println!("✗ Notebook execution completed with errors");
-            }
-            println!("Total cells in range: {}", output_result.total_cells);
-            println!("Executed: {}", output_result.executed_cells);
-            println!("Failed: {}", output_result.failed_cells);
-
-            if matches!(mode, ExecutionMode::Local) {
-                println!("\nNotebook updated: {}", file_path);
-            } else {
-                println!("\n(Executed via Jupyter Server)");
-            }
+            let output_dir = markdown_renderer::notebook_output_dir(&file_path);
+            std::fs::create_dir_all(&output_dir)?;
+            let markdown = markdown_renderer::render_notebook_markdown(
+                &notebook,
+                true,
+                Some(&output_dir),
+                common::DEFAULT_INLINE_LIMIT,
+            )?;
+            print!("{}", markdown);
         }
     }
 
-    if !output_result.success {
+    if !success {
         std::process::exit(1);
     }
 
