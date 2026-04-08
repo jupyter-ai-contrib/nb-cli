@@ -306,7 +306,7 @@ fn test_execute_with_uv_kernel_succeeds() {
         .assert_success();
 
     assert!(
-        result.contains("executed") || result.contains("Executed") || result.contains("success"),
+        result.contains("execution_count") || result.contains("@@notebook"),
         "Execution should succeed"
     );
 

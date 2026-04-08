@@ -12,9 +12,8 @@ use crate::execution::ExecutionBackend;
 use anyhow::{Context, Result};
 use client::{JupyterClient, SessionInfo};
 use jupyter_protocol::messaging::JupyterMessageContent;
-use std::time::Duration;
-use tokio::time::timeout;
 use websocket::KernelWebSocket;
+use ydoc::YDocClient;
 
 /// Remote execution backend using Jupyter Server
 pub struct RemoteExecutor {
@@ -24,6 +23,7 @@ pub struct RemoteExecutor {
     client: Option<JupyterClient>,
     session: Option<SessionInfo>,
     ws: Option<KernelWebSocket>,
+    ydoc: Option<YDocClient>,
     /// Track if we created the session (true) or reused existing (false)
     created_session: bool,
 }
@@ -37,106 +37,34 @@ impl RemoteExecutor {
             client: None,
             session: None,
             ws: None,
+            ydoc: None,
             created_session: false,
         })
     }
 
-    /// Collect outputs from WebSocket messages
-    async fn collect_outputs(
-        ws: &mut KernelWebSocket,
-        msg_id: &str,
-        timeout_duration: Duration,
-    ) -> Result<(Vec<nbformat::v4::Output>, Option<i64>)> {
-        let mut outputs = Vec::new();
-        let mut execution_count: Option<i64> = None;
-        let mut idle_received = false;
-        let mut error_info: Option<ExecutionError> = None;
-
-        // Collect messages until we see idle status
-        let collect_result = timeout(timeout_duration, async {
-            while !idle_received {
-                let msg = match ws.recv_message().await? {
-                    Some(m) => m,
-                    None => break,
-                };
-
-                // Only process messages related to our execution
-                let is_our_message = msg
-                    .parent_header
-                    .as_ref()
-                    .map(|h| h.msg_id == msg_id)
-                    .unwrap_or(false);
-                if !is_our_message {
-                    continue;
-                }
-
-                // Process message content
-                match msg.content {
-                    JupyterMessageContent::Status(status) => {
-                        if matches!(
-                            status.execution_state,
-                            jupyter_protocol::ExecutionState::Idle
-                        ) {
-                            idle_received = true;
+    /// Fetch a single externalized output from the outputs REST API.
+    async fn fetch_output(
+        http: &reqwest::Client,
+        server_url: &str,
+        token: &str,
+        url_path: &str,
+    ) -> Option<nbformat::v4::Output> {
+        let url = format!("{}{}", server_url, url_path);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            if let Ok(resp) = http.get(&url).query(&[("token", token)]).send().await {
+                if resp.status().is_success() {
+                    if let Ok(text) = resp.text().await {
+                        if let Ok(output) = serde_json::from_str::<nbformat::v4::Output>(&text) {
+                            return Some(output);
                         }
                     }
-                    JupyterMessageContent::StreamContent(stream) => {
-                        let output = serde_json::json!({
-                            "output_type": "stream",
-                            "name": stream.name,
-                            "text": stream.text
-                        });
-                        outputs.push(serde_json::from_value(output)?);
-                    }
-                    JupyterMessageContent::DisplayData(display) => {
-                        let output = serde_json::json!({
-                            "output_type": "display_data",
-                            "data": display.data,
-                            "metadata": display.metadata
-                        });
-                        outputs.push(serde_json::from_value(output)?);
-                    }
-                    JupyterMessageContent::ExecuteResult(result) => {
-                        execution_count = Some(result.execution_count.0 as i64);
-                        let output = serde_json::json!({
-                            "output_type": "execute_result",
-                            "execution_count": result.execution_count.0 as i64,
-                            "data": result.data,
-                            "metadata": result.metadata
-                        });
-                        outputs.push(serde_json::from_value(output)?);
-                    }
-                    JupyterMessageContent::ErrorOutput(error) => {
-                        error_info = Some(ExecutionError {
-                            ename: error.ename.clone(),
-                            evalue: error.evalue.clone(),
-                            traceback: error.traceback.clone(),
-                        });
-                        let output = nbformat::v4::Output::Error(nbformat::v4::ErrorOutput {
-                            ename: error.ename,
-                            evalue: error.evalue,
-                            traceback: error.traceback,
-                        });
-                        outputs.push(output);
-                    }
-                    _ => {}
                 }
             }
-
-            Ok::<_, anyhow::Error>((outputs, execution_count, error_info))
-        })
-        .await;
-
-        match collect_result {
-            Ok(result) => {
-                let (outputs, execution_count, _error_info) = result?;
-                // Error info is already included in outputs as Error variant
-                Ok((outputs, execution_count))
+            if tokio::time::Instant::now() > deadline {
+                return None;
             }
-            Err(_) => Err(anyhow::anyhow!(
-                "Execution timeout after {:?}",
-                timeout_duration
-            )),
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
     }
 }
@@ -191,54 +119,146 @@ impl ExecutionBackend for RemoteExecutor {
         self.session = Some(session);
         self.ws = Some(ws);
 
+        // Connect Y.js client for observing outputs during execution
+        if let Some(ref notebook_path) = self.config.notebook_path {
+            let ydoc = YDocClient::connect(
+                self.server_url.clone(),
+                self.token.clone(),
+                notebook_path.clone(),
+            )
+            .await
+            .context("Failed to connect Y.js client for output observation")?;
+            self.ydoc = Some(ydoc);
+        }
+
         Ok(())
     }
 
-    async fn execute_code(&mut self, code: &str, cell_id: Option<&str>) -> Result<ExecutionResult> {
+    async fn execute_code(
+        &mut self,
+        code: &str,
+        cell_id: Option<&str>,
+        cell_index: Option<usize>,
+        on_output: Option<&crate::execution::OutputCallback>,
+    ) -> Result<ExecutionResult> {
         let ws = self.ws.as_mut().context("WebSocket not connected")?;
 
-        // Send execute request with cell_id
+        let cell_idx = cell_index.context("cell_index required for remote execution")?;
+        let ydoc = self.ydoc.as_mut().context("Y.js client not connected")?;
+        let http = reqwest::Client::new();
+
+        // Snapshot the execution_count before we start so we know when new results arrive
+        let prev_ec = ydoc
+            .read_cell_outputs(cell_idx)
+            .ok()
+            .and_then(|c| c.execution_count);
+
+        // Send execute request
         let msg_id = ws
             .send_execute_request(code, !self.config.allow_errors, cell_id)
             .await?;
 
-        // Collect outputs
-        let (outputs, execution_count) =
-            Self::collect_outputs(ws, &msg_id, self.config.timeout).await?;
+        let mut outputs: Vec<nbformat::v4::Output> = Vec::new();
+        let mut seen_output_count: usize = 0;
+        let mut idle_received = false;
+        let deadline = tokio::time::Instant::now() + self.config.timeout;
 
-        // Check if any output is an error
-        let has_error = outputs
-            .iter()
-            .any(|o| matches!(o, nbformat::v4::Output::Error(_)));
-
-        if has_error {
-            // Extract error info from error output
-            let error_info = outputs.iter().find_map(|o| {
-                if let nbformat::v4::Output::Error(err) = o {
-                    Some(ExecutionError {
-                        ename: err.ename.clone(),
-                        evalue: err.evalue.clone(),
-                        traceback: err.traceback.clone(),
-                    })
-                } else {
-                    None
+        loop {
+            if idle_received {
+                match tokio::time::timeout_at(deadline, ydoc.recv_update()).await {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => return Err(e).context("Y.js update error"),
+                    Err(_) => break,
                 }
-            });
+            } else {
+                tokio::select! {
+                    kernel_msg = ws.recv_message() => {
+                        if let Some(msg) = kernel_msg? {
+                            let is_ours = msg.parent_header.as_ref()
+                                .map(|h| h.msg_id == msg_id).unwrap_or(false);
+                            if is_ours {
+                                if let JupyterMessageContent::Status(status) = msg.content {
+                                    if matches!(status.execution_state,
+                                        jupyter_protocol::ExecutionState::Idle) {
+                                        idle_received = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    ydoc_result = ydoc.recv_update() => {
+                        ydoc_result.context("Y.js update error")?;
+                    }
+                }
+            }
 
-            Ok(ExecutionResult::error(
-                outputs,
-                execution_count,
-                error_info.unwrap(),
-            ))
-        } else {
-            Ok(ExecutionResult::success(outputs, execution_count))
+            if let Ok(cell_data) = ydoc.read_cell_outputs(cell_idx) {
+                let ec = cell_data.execution_count;
+                let ec_changed = ec != prev_ec && ec.is_some();
+                let current_count = cell_data.externalized_urls.len();
+
+                // Outputs were cleared (reset for new execution)
+                if current_count < seen_output_count {
+                    seen_output_count = 0;
+                    outputs.clear();
+                }
+
+                // Fetch new outputs
+                if current_count > seen_output_count {
+                    for (_, url_path) in &cell_data.externalized_urls[seen_output_count..] {
+                        if let Some(output) =
+                            Self::fetch_output(&http, &self.server_url, &self.token, url_path).await
+                        {
+                            if let Some(cb) = &on_output {
+                                cb(&output);
+                            }
+                            outputs.push(output);
+                        }
+                    }
+                    seen_output_count = current_count;
+                }
+
+                // Done when kernel is idle and execution_count has changed
+                if idle_received && ec_changed {
+                    let has_error = outputs
+                        .iter()
+                        .any(|o| matches!(o, nbformat::v4::Output::Error(_)));
+                    let error_info = outputs.iter().find_map(|o| {
+                        if let nbformat::v4::Output::Error(err) = o {
+                            Some(ExecutionError {
+                                ename: err.ename.clone(),
+                                evalue: err.evalue.clone(),
+                                traceback: err.traceback.clone(),
+                            })
+                        } else {
+                            None
+                        }
+                    });
+                    return if has_error {
+                        Ok(ExecutionResult::error(outputs, ec, error_info.unwrap()))
+                    } else {
+                        Ok(ExecutionResult::success(outputs, ec))
+                    };
+                }
+            }
         }
+
+        let ec = ydoc
+            .read_cell_outputs(cell_idx)
+            .ok()
+            .and_then(|c| c.execution_count);
+        Ok(ExecutionResult::success(outputs, ec))
     }
 
     async fn stop(&mut self) -> Result<()> {
-        // Close WebSocket
+        // Close kernel WebSocket
         if let Some(ws) = self.ws.take() {
             let _ = ws.close().await;
+        }
+
+        // Close Y.js WebSocket
+        if let Some(ydoc) = self.ydoc.take() {
+            let _ = ydoc.close().await;
         }
 
         // Don't delete session - let it persist for reuse in subsequent executions

@@ -323,6 +323,8 @@ impl ExecutionBackend for LocalExecutor {
         &mut self,
         code: &str,
         _cell_id: Option<&str>,
+        _cell_index: Option<usize>,
+        _on_output: Option<&crate::execution::OutputCallback>,
     ) -> Result<ExecutionResult> {
         self.execute_cell(code).await
     }

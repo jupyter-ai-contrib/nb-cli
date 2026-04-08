@@ -11,6 +11,9 @@ pub mod types;
 use anyhow::Result;
 use types::{ExecutionConfig, ExecutionMode, ExecutionResult};
 
+/// Callback invoked when an output is produced during execution
+pub type OutputCallback = Box<dyn Fn(&nbformat::v4::Output) + Send + Sync>;
+
 /// Backend for executing code
 ///
 /// Implementations provide either local (direct kernel) or remote (Jupyter server) execution
@@ -24,7 +27,15 @@ pub trait ExecutionBackend: Send {
     /// # Arguments
     /// * `code` - The code to execute
     /// * `cell_id` - Optional cell ID for remote execution (used by Jupyter Server)
-    async fn execute_code(&mut self, code: &str, cell_id: Option<&str>) -> Result<ExecutionResult>;
+    /// * `cell_index` - Optional cell index for Y.js document observation in remote mode
+    /// * `on_output` - Optional callback invoked as each output arrives (for streaming)
+    async fn execute_code(
+        &mut self,
+        code: &str,
+        cell_id: Option<&str>,
+        cell_index: Option<usize>,
+        on_output: Option<&OutputCallback>,
+    ) -> Result<ExecutionResult>;
 
     /// Stop the backend (cleanup kernel or close session)
     async fn stop(&mut self) -> Result<()>;

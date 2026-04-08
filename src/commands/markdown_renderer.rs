@@ -75,7 +75,7 @@ pub fn render_indexed_cells_markdown(
 }
 
 /// Render the notebook header with format metadata
-fn render_notebook_header(notebook: &Notebook) -> Result<String> {
+pub fn render_notebook_header(notebook: &Notebook) -> Result<String> {
     let mut metadata_obj = json!({});
 
     // Include kernelspec if present
@@ -321,6 +321,41 @@ impl OutputHeaderBuilder {
         let json_str = serde_json::to_string(&json_obj).unwrap_or_default();
         format!("@@output {}", json_str)
     }
+}
+
+/// Render a single output (public, for streaming use)
+pub fn render_single_output(
+    output: &Output,
+    output_dir: Option<&Path>,
+    inline_limit: usize,
+) -> Result<String> {
+    render_output(output, output_dir, inline_limit)
+}
+
+/// Render a cell header and body without outputs (public, for streaming use).
+/// The `execution_count` parameter overrides the cell's stored value.
+pub fn render_cell_header_and_body(
+    cell: &Cell,
+    notebook: &Notebook,
+    index: usize,
+    execution_count: Option<i32>,
+) -> Result<String> {
+    let language = extract_language(notebook);
+    let cell_id = get_cell_id_or_empty(cell);
+    let metadata = match cell {
+        Cell::Code { metadata, .. } => metadata,
+        Cell::Markdown { metadata, .. } => metadata,
+        Cell::Raw { metadata, .. } => metadata,
+    };
+    let cell_type = match cell {
+        Cell::Code { .. } => "code",
+        Cell::Markdown { .. } => "markdown",
+        Cell::Raw { .. } => "raw",
+    };
+    let mut result = render_cell_header(cell_type, &cell_id, execution_count, metadata, index)?;
+    result.push('\n');
+    result.push_str(&render_cell_body(cell, &language)?);
+    Ok(result)
 }
 
 /// Render a single output

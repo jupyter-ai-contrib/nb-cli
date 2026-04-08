@@ -184,9 +184,17 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     let mut failed_count = 0;
     let mut execution_results: HashMap<usize, crate::execution::types::ExecutionResult> =
         HashMap::new();
-    // Track the last executed cell for remote mode save polling
-    let mut last_executed_cell_id: Option<String> = None;
-    let mut last_executed_old_ec: Option<i32> = None;
+
+    let is_streaming = matches!(mode, ExecutionMode::Remote { .. })
+        && matches!(format, OutputFormat::Text | OutputFormat::Markdown);
+
+    // For streaming remote text mode, print notebook header before execution
+    if is_streaming {
+        println!(
+            "{}\n",
+            markdown_renderer::render_notebook_header(&notebook)?
+        );
+    }
 
     for (i, cell) in notebook.cells.iter().enumerate() {
         // Skip cells outside range
@@ -196,6 +204,14 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
 
         // Skip non-code cells
         if !matches!(cell, Cell::Code { .. }) {
+            // In streaming mode, render non-code cells inline
+            if is_streaming {
+                if let Ok(header) =
+                    markdown_renderer::render_cell_header_and_body(cell, &notebook, i, None)
+                {
+                    print!("\n{}\n", header);
+                }
+            }
             continue;
         }
 
@@ -203,21 +219,42 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         let source = crate::commands::common::cell_to_string(cell);
         let cell_id = crate::commands::common::cell_id_to_string(cell);
 
-        // Execute cell
-        match backend.execute_code(&source, Some(&cell_id)).await {
+        // For streaming: print cell header before execution, stream outputs as they arrive
+        let on_output: Option<crate::execution::OutputCallback> = if is_streaming {
+            // Print cell header + body before execution (execution_count not yet known)
+            if let Ok(header) =
+                markdown_renderer::render_cell_header_and_body(cell, &notebook, i, None)
+            {
+                print!("\n{}", header);
+            }
+            Some(Box::new(|output: &nbformat::v4::Output| {
+                if let Ok(rendered) = markdown_renderer::render_single_output(
+                    output,
+                    None,
+                    common::DEFAULT_INLINE_LIMIT,
+                ) {
+                    print!("\n\n{}", rendered);
+                }
+            }))
+        } else {
+            None
+        };
+
+        match backend
+            .execute_code(&source, Some(&cell_id), Some(i), on_output.as_ref())
+            .await
+        {
             Ok(result) => {
                 let success = result.success;
+
+                if is_streaming {
+                    // Newline after streamed outputs
+                    println!();
+                }
 
                 // Store result for later processing
                 execution_results.insert(i, result);
                 executed_count += 1;
-                last_executed_cell_id = Some(cell_id.clone());
-                last_executed_old_ec = match &notebook.cells[i] {
-                    Cell::Code {
-                        execution_count, ..
-                    } => *execution_count,
-                    _ => None,
-                };
 
                 if !success {
                     failed_count += 1;
@@ -258,39 +295,8 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
             write_notebook_atomic(&file_path, &notebook).context("Failed to write notebook")?;
         }
         ExecutionMode::Remote { .. } => {
-            // In remote mode, jupyter-server-documents routes kernel outputs to Y.js
-            // document sync (not the WebSocket), which auto-saves to disk.
-            // Poll until the last executed cell's execution_count changes on disk.
-            if let Some(ref cell_id) = last_executed_cell_id {
-                let poll_timeout = Duration::from_secs(5);
-                let poll_start = std::time::Instant::now();
-                loop {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    if let Ok(saved) = read_notebook(&file_path) {
-                        let ready = saved.cells.iter().any(|c| {
-                            if c.id().as_str() != cell_id {
-                                return false;
-                            }
-                            match c {
-                                Cell::Code {
-                                    execution_count, ..
-                                } => *execution_count != last_executed_old_ec,
-                                _ => false,
-                            }
-                        });
-                        if ready {
-                            notebook = saved;
-                            break;
-                        }
-                    }
-                    if poll_start.elapsed() > poll_timeout {
-                        if let Ok(saved) = read_notebook(&file_path) {
-                            notebook = saved;
-                        }
-                        break;
-                    }
-                }
-            }
+            // In remote mode, outputs are read from Y.js document during execution.
+            // The server auto-saves to disk via jupyter-server-documents.
         }
     }
 
@@ -312,15 +318,18 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&output_result)?);
         }
         OutputFormat::Text | OutputFormat::Markdown => {
-            let output_dir = markdown_renderer::notebook_output_dir(&file_path);
-            std::fs::create_dir_all(&output_dir)?;
-            let markdown = markdown_renderer::render_notebook_markdown(
-                &notebook,
-                true,
-                Some(&output_dir),
-                common::DEFAULT_INLINE_LIMIT,
-            )?;
-            print!("{}", markdown);
+            if !is_streaming {
+                let output_dir = markdown_renderer::notebook_output_dir(&file_path);
+                std::fs::create_dir_all(&output_dir)?;
+                let markdown = markdown_renderer::render_notebook_markdown(
+                    &notebook,
+                    true,
+                    Some(&output_dir),
+                    common::DEFAULT_INLINE_LIMIT,
+                )?;
+                print!("{}", markdown);
+            }
+            // Streaming mode already printed everything to stdout
         }
     }
 
