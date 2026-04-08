@@ -43,6 +43,9 @@ impl RemoteExecutor {
     }
 
     /// Fetch a single externalized output from the outputs REST API.
+    /// The Y.js placeholder (metadata.url) can propagate before the server
+    /// finishes writing the output file, so we retry with a 200ms interval
+    /// to reduce 404 spam while the file write completes.
     async fn fetch_output(
         http: &reqwest::Client,
         server_url: &str,
@@ -64,7 +67,7 @@ impl RemoteExecutor {
             if tokio::time::Instant::now() > deadline {
                 return None;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
     }
 }
