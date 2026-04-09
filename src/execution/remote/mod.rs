@@ -12,6 +12,7 @@ use crate::execution::ExecutionBackend;
 use anyhow::{Context, Result};
 use client::{JupyterClient, SessionInfo};
 use jupyter_protocol::messaging::JupyterMessageContent;
+use std::collections::HashSet;
 use websocket::KernelWebSocket;
 use ydoc::YDocClient;
 
@@ -43,9 +44,7 @@ impl RemoteExecutor {
     }
 
     /// Fetch a single externalized output from the outputs REST API.
-    /// The Y.js placeholder (metadata.url) can propagate before the server
-    /// finishes writing the output file, so we retry with a 200ms interval
-    /// to reduce 404 spam while the file write completes.
+    /// Waits 100ms before the first attempt, then uses exponential backoff.
     async fn fetch_output(
         http: &reqwest::Client,
         server_url: &str,
@@ -54,6 +53,11 @@ impl RemoteExecutor {
     ) -> Option<nbformat::v4::Output> {
         let url = format!("{}{}", server_url, url_path);
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut backoff_ms = 100u64; // initial delay before first fetch
+
+        // Wait before first attempt to let the server populate the output
+        tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+
         loop {
             if let Ok(resp) = http.get(&url).query(&[("token", token)]).send().await {
                 if resp.status().is_success() {
@@ -67,7 +71,8 @@ impl RemoteExecutor {
             if tokio::time::Instant::now() > deadline {
                 return None;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            backoff_ms = (backoff_ms * 2).min(1000);
+            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
         }
     }
 }
@@ -145,33 +150,36 @@ impl ExecutionBackend for RemoteExecutor {
         on_output: Option<&crate::execution::OutputCallback>,
     ) -> Result<ExecutionResult> {
         let ws = self.ws.as_mut().context("WebSocket not connected")?;
-
         let cell_idx = cell_index.context("cell_index required for remote execution")?;
         let ydoc = self.ydoc.as_mut().context("Y.js client not connected")?;
         let http = reqwest::Client::new();
 
-        // Snapshot the execution_count before we start so we know when new results arrive
+        // 1. Snapshot current state before execution
         let prev_ec = ydoc
             .read_cell_outputs(cell_idx)
             .ok()
             .and_then(|c| c.execution_count);
 
-        // Send execute request
+        // 2. Fire execute request
         let msg_id = ws
             .send_execute_request(code, !self.config.allow_errors, cell_id)
             .await?;
 
+        // 3. Watch for changes on the ydoc for this cell
         let mut outputs: Vec<nbformat::v4::Output> = Vec::new();
-        let mut seen_output_count: usize = 0;
+        let mut fetched_urls: HashSet<String> = HashSet::new();
+        let mut seen_indices: HashSet<usize> = HashSet::new();
         let mut idle_received = false;
+        let mut ec_changed = false;
         let deadline = tokio::time::Instant::now() + self.config.timeout;
 
         loop {
+            // Wait for either a kernel message or a ydoc update
             if idle_received {
                 match tokio::time::timeout_at(deadline, ydoc.recv_update()).await {
                     Ok(Ok(_)) => {}
                     Ok(Err(e)) => return Err(e).context("Y.js update error"),
-                    Err(_) => break,
+                    Err(_) => break, // timeout — return what we have
                 }
             } else {
                 tokio::select! {
@@ -195,70 +203,66 @@ impl ExecutionBackend for RemoteExecutor {
                 }
             }
 
-            if let Ok(cell_data) = ydoc.read_cell_outputs(cell_idx) {
-                let ec = cell_data.execution_count;
-                let ec_changed = ec != prev_ec && ec.is_some();
-                let total_count =
-                    cell_data.externalized_urls.len() + cell_data.inline_outputs.len();
+            // 4. Read cell state from ydoc
+            let cell_data = match ydoc.read_cell_outputs(cell_idx) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let ec = cell_data.execution_count;
 
-                // Outputs were cleared (reset for new execution)
-                if total_count < seen_output_count {
-                    seen_output_count = 0;
-                    outputs.clear();
+            // Wait for execution_count to change — ignore stale outputs from previous run
+            if !ec_changed {
+                if ec != prev_ec && ec.is_some() {
+                    ec_changed = true;
+                } else {
+                    continue;
                 }
+            }
 
-                // Collect new outputs (both externalized and inline)
-                if total_count > seen_output_count {
-                    // Build a sorted list of all outputs by index
-                    let mut new_outputs: Vec<(usize, Option<nbformat::v4::Output>)> = Vec::new();
-                    for (idx, url_path) in &cell_data.externalized_urls {
-                        if *idx >= seen_output_count {
-                            let output =
-                                Self::fetch_output(&http, &self.server_url, &self.token, url_path)
-                                    .await;
-                            new_outputs.push((*idx, output));
+            // 5. Load new outputs as they appear
+            for (idx, url_path) in &cell_data.externalized_urls {
+                if fetched_urls.insert(url_path.clone()) {
+                    seen_indices.insert(*idx);
+                    if let Some(output) =
+                        Self::fetch_output(&http, &self.server_url, &self.token, url_path).await
+                    {
+                        if let Some(cb) = &on_output {
+                            cb(&output);
                         }
+                        outputs.push(output);
                     }
-                    for (idx, output) in &cell_data.inline_outputs {
-                        if *idx >= seen_output_count {
-                            new_outputs.push((*idx, Some(output.clone())));
-                        }
-                    }
-                    new_outputs.sort_by_key(|(idx, _)| *idx);
-
-                    for (_, output) in new_outputs {
-                        if let Some(output) = output {
-                            if let Some(cb) = &on_output {
-                                cb(&output);
-                            }
-                            outputs.push(output);
-                        }
-                    }
-                    seen_output_count = total_count;
                 }
+            }
+            for (idx, output) in &cell_data.inline_outputs {
+                if seen_indices.insert(*idx) {
+                    if let Some(cb) = &on_output {
+                        cb(output);
+                    }
+                    outputs.push(output.clone());
+                }
+            }
 
-                // Done when kernel is idle and execution_count has changed
-                if idle_received && ec_changed {
-                    let has_error = outputs
-                        .iter()
-                        .any(|o| matches!(o, nbformat::v4::Output::Error(_)));
-                    let error_info = outputs.iter().find_map(|o| {
-                        if let nbformat::v4::Output::Error(err) = o {
-                            Some(ExecutionError {
-                                ename: err.ename.clone(),
-                                evalue: err.evalue.clone(),
-                                traceback: err.traceback.clone(),
-                            })
-                        } else {
-                            None
-                        }
-                    });
-                    return if has_error {
-                        Ok(ExecutionResult::error(outputs, ec, error_info.unwrap()))
+            // 6. Done when kernel is idle and ec has changed
+            if idle_received && ec_changed {
+                let has_error = outputs
+                    .iter()
+                    .any(|o| matches!(o, nbformat::v4::Output::Error(_)));
+                let error_info = outputs.iter().find_map(|o| {
+                    if let nbformat::v4::Output::Error(err) = o {
+                        Some(ExecutionError {
+                            ename: err.ename.clone(),
+                            evalue: err.evalue.clone(),
+                            traceback: err.traceback.clone(),
+                        })
                     } else {
-                        Ok(ExecutionResult::success(outputs, ec))
-                    };
-                }
+                        None
+                    }
+                });
+                return if has_error {
+                    Ok(ExecutionResult::error(outputs, ec, error_info.unwrap()))
+                } else {
+                    Ok(ExecutionResult::success(outputs, ec))
+                };
             }
         }
 
