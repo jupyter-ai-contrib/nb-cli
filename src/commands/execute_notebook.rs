@@ -61,6 +61,10 @@ pub struct ExecuteNotebookArgs {
     /// Use pixi to discover kernels in local mode
     #[arg(long, conflicts_with = "uv")]
     pub pixi: bool,
+
+    /// Restart kernel before execution (remote mode only)
+    #[arg(long)]
+    pub restart_kernel: bool,
 }
 
 #[derive(Serialize)]
@@ -173,6 +177,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         allow_errors: args.allow_errors,
         notebook_path: Some(notebook_identifier.clone()),
         env_config: env_config.clone(),
+        restart_kernel: args.restart_kernel,
     };
 
     // Create and start backend (reuse kernel for all cells)

@@ -33,6 +33,9 @@ pub struct ExecutionConfig {
 
     /// Environment manager configuration (for local mode kernel discovery)
     pub env_config: Option<EnvConfig>,
+
+    /// Restart kernel before execution (remote mode, full notebook)
+    pub restart_kernel: bool,
 }
 
 impl Default for ExecutionConfig {
@@ -44,6 +47,7 @@ impl Default for ExecutionConfig {
             allow_errors: false,
             notebook_path: None,
             env_config: None,
+            restart_kernel: false,
         }
     }
 }

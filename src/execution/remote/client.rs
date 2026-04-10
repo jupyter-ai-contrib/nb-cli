@@ -79,6 +79,27 @@ impl JupyterClient {
         Ok(())
     }
 
+    /// Get kernel info by ID
+    pub async fn get_kernel(&self, kernel_id: &str) -> Result<KernelInfo> {
+        let url = format!("{}/api/kernels/{}", self.base_url, kernel_id);
+        let response = self
+            .client
+            .get(&url)
+            .query(&[("token", &self.token)])
+            .send()
+            .await
+            .context("Failed to get kernel info")?;
+
+        if !response.status().is_success() {
+            anyhow::bail!("Failed to get kernel info: HTTP {}", response.status());
+        }
+
+        response
+            .json()
+            .await
+            .context("Failed to parse kernel info response")
+    }
+
     /// List all running kernels
     #[allow(dead_code)]
     pub async fn list_kernels(&self) -> Result<Vec<KernelInfo>> {
@@ -239,6 +260,27 @@ impl JupyterClient {
             .context("Failed to parse session response")?;
 
         Ok(session)
+    }
+
+    /// Restart a kernel
+    pub async fn restart_kernel(&self, kernel_id: &str) -> Result<KernelInfo> {
+        let url = format!("{}/api/kernels/{}/restart", self.base_url, kernel_id);
+        let response = self
+            .client
+            .post(&url)
+            .query(&[("token", &self.token)])
+            .send()
+            .await
+            .context("Failed to restart kernel")?;
+
+        if !response.status().is_success() {
+            anyhow::bail!("Failed to restart kernel: HTTP {}", response.status());
+        }
+
+        response
+            .json()
+            .await
+            .context("Failed to parse kernel restart response")
     }
 
     /// Delete a session

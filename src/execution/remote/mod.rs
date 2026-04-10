@@ -98,6 +98,33 @@ impl ExecutionBackend for RemoteExecutor {
         // Try to find and reuse existing session by notebook path
         let (session, created) = if let Some(ref notebook_path) = self.config.notebook_path {
             if let Some(existing) = sessions.iter().find(|s| s.path == *notebook_path) {
+                // Restart kernel if requested (full notebook execution)
+                if self.config.restart_kernel {
+                    eprintln!("[debug] Restarting kernel: {}", existing.kernel.id);
+                    let restart_info = client
+                        .restart_kernel(&existing.kernel.id)
+                        .await
+                        .context("Failed to restart kernel")?;
+                    eprintln!(
+                        "[debug] Restart response: state={}",
+                        restart_info.execution_state
+                    );
+                    // Wait for kernel to be ready
+                    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        let info = client.get_kernel(&existing.kernel.id).await?;
+                        eprintln!("[debug] Kernel state: {}", info.execution_state);
+                        if info.execution_state == "idle" {
+                            break;
+                        }
+                        if tokio::time::Instant::now() > deadline {
+                            anyhow::bail!(
+                                "Timeout waiting for kernel to become ready after restart"
+                            );
+                        }
+                    }
+                }
                 // Return the existing session directly - no new session/kernel creation
                 (existing.clone(), false)
             } else {
