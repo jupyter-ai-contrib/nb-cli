@@ -81,15 +81,15 @@ jobs:
             artifact_name: nb
             asset_name: nb-macos-amd64
 
-          # Linux x86_64
+          # Linux x86_64 (musl for maximum glibc compatibility)
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             artifact_name: nb
             asset_name: nb-linux-amd64
 
-          # Linux ARM64
+          # Linux ARM64 (musl for maximum glibc compatibility)
           - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
+            target: aarch64-unknown-linux-musl
             artifact_name: nb
             asset_name: nb-linux-arm64
 
@@ -122,26 +122,32 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross-compilation tools (Linux ARM64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+      - name: Install musl tools (Linux x86_64)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          sudo apt-get install -y musl-tools
 
-      - name: Configure linker for ARM64 cross-compilation
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+      - name: Install cross-compilation tools (Linux ARM64 musl)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
         run: |
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          sudo apt-get update
+          sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu
+          # Install aarch64 musl cross-compiler
+          wget -q https://musl.cc/aarch64-linux-musl-cross.tgz
+          tar xzf aarch64-linux-musl-cross.tgz -C /opt
+          echo "/opt/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc" >> $GITHUB_ENV
 
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Strip binary (Linux ARM64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: aarch64-linux-gnu-strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+      - name: Strip binary (Linux ARM64 musl)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: /opt/aarch64-linux-musl-cross/bin/aarch64-linux-musl-strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
 
       - name: Strip binary (other platforms)
-        if: matrix.os != 'windows-latest' && matrix.target != 'aarch64-unknown-linux-gnu'
+        if: matrix.os != 'windows-latest' && matrix.target != 'aarch64-unknown-linux-musl'
         run: strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
 
       - name: Upload artifact
