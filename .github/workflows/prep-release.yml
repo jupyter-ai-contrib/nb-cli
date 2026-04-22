@@ -131,23 +131,23 @@ jobs:
       - name: Install cross-compilation tools (Linux ARM64 musl)
         if: matrix.target == 'aarch64-unknown-linux-musl'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu
-          # Install aarch64 musl cross-compiler
-          wget -q https://musl.cc/aarch64-linux-musl-cross.tgz
-          tar xzf aarch64-linux-musl-cross.tgz -C /opt
-          echo "/opt/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc" >> $GITHUB_ENV
+          pip install ziglang
+          cargo install cargo-zigbuild --locked
+
+      - name: Build release binary (Linux ARM64 musl)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: cargo zigbuild --release --target ${{ matrix.target }}
 
       - name: Build release binary
+        if: matrix.target != 'aarch64-unknown-linux-musl'
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Strip binary (Linux ARM64 musl)
-        if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: /opt/aarch64-linux-musl-cross/bin/aarch64-linux-musl-strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+      - name: Strip binary (Linux musl)
+        if: matrix.os == 'ubuntu-latest'
+        run: llvm-strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
 
-      - name: Strip binary (other platforms)
-        if: matrix.os != 'windows-latest' && matrix.target != 'aarch64-unknown-linux-musl'
+      - name: Strip binary (macOS)
+        if: matrix.os == 'macos-latest'
         run: strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
 
       - name: Upload artifact
