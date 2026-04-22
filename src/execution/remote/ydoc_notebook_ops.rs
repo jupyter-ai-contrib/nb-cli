@@ -6,35 +6,6 @@ use yrs::{Any, Array, ArrayPrelim, Map, MapPrelim, MapRef, Text, TextPrelim, Tra
 
 use super::ydoc::YDocClient;
 
-/// Add a new cell to the notebook via Y.js
-pub async fn ydoc_add_cell(
-    server_url: &str,
-    token: &str,
-    notebook_path: &str,
-    cell: &Cell,
-    index: usize,
-) -> Result<()> {
-    // Connect to Y.js document
-    let mut ydoc_client = YDocClient::connect(
-        server_url.to_string(),
-        token.to_string(),
-        notebook_path.to_string(),
-    )
-    .await?;
-
-    // Add the cell to the Y.js document
-    add_cell_to_ydoc(ydoc_client.get_doc(), cell, index)
-        .context("Failed to add cell to Y.js document")?;
-
-    // Sync changes
-    ydoc_client.sync().await.context("Failed to sync changes")?;
-
-    // Close connection
-    ydoc_client.close().await?;
-
-    Ok(())
-}
-
 /// Add a cell to the Y.js document
 fn add_cell_to_ydoc(doc: &yrs::Doc, cell: &Cell, index: usize) -> Result<()> {
     let cells_array = doc.get_or_insert_array("cells");
@@ -135,6 +106,37 @@ fn add_cell_to_ydoc(doc: &yrs::Doc, cell: &Cell, index: usize) -> Result<()> {
 /// Convert source Vec<String> to a single string
 fn source_to_string(source: &[String]) -> String {
     source.join("")
+}
+
+/// Add cells to the notebook via Y.js in a single connection
+pub async fn ydoc_add_cells(
+    server_url: &str,
+    token: &str,
+    notebook_path: &str,
+    cells: &[Cell],
+    start_index: usize,
+) -> Result<()> {
+    // Connect to Y.js document
+    let mut ydoc_client = YDocClient::connect(
+        server_url.to_string(),
+        token.to_string(),
+        notebook_path.to_string(),
+    )
+    .await?;
+
+    // Add all cells to the Y.js document consecutively
+    for (i, cell) in cells.iter().enumerate() {
+        add_cell_to_ydoc(ydoc_client.get_doc(), cell, start_index + i)
+            .context("Failed to add cell to Y.js document")?;
+    }
+
+    // Sync changes
+    ydoc_client.sync().await.context("Failed to sync changes")?;
+
+    // Close connection
+    ydoc_client.close().await?;
+
+    Ok(())
 }
 
 /// Delete cells from the notebook via Y.js

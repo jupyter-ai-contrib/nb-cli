@@ -42,6 +42,12 @@ nb cell update notebook.ipynb --cell-index 2 --source "new code"
 
 # Add cell
 nb cell add notebook.ipynb --source "print('hello')"
+
+# Add multiple cells (use @@code, @@markdown, @@raw sentinels)
+nb cell add notebook.ipynb -s '@@code
+import pandas as pd
+@@code
+df = pd.read_csv("data.csv")'
 ```
 
 ## Running Python in the Correct Environment
@@ -169,6 +175,57 @@ nb cell add notebook.ipynb --source "code" --id "my-custom-id"
 # Read from stdin
 echo "print('Hello')" | nb cell add notebook.ipynb --source -
 ```
+
+### Adding Multiple Cells
+
+Use `@@code`, `@@markdown`, and `@@raw` sentinels on their own line within the `--source` string to add multiple cells in a single call. Each sentinel starts a new cell of that type; everything between sentinels is the cell's source content.
+
+```bash
+# Add multiple code cells
+nb cell add notebook.ipynb -s '@@code
+x = 1
+@@code
+y = 2
+@@code
+print(x + y)'
+
+# Mix cell types
+nb cell add notebook.ipynb -s '@@markdown
+# Analysis
+@@code
+import pandas as pd
+df = pd.read_csv("data.csv")
+@@markdown
+## Results
+@@code
+df.describe()'
+
+# Insert multiple cells at a position
+nb cell add notebook.ipynb -s '@@code
+import numpy as np
+@@code
+data = np.random.rand(100)' --insert-at 0
+
+# Insert multiple cells after a specific cell
+nb cell add notebook.ipynb -s '@@code
+step_1()
+@@code
+step_2()' --after "cell-id-123"
+
+# Via stdin
+cat <<'EOF' | nb cell add notebook.ipynb -s -
+@@markdown
+# Setup
+@@code
+import pandas as pd
+@@code
+df = pd.read_csv("data.csv")
+EOF
+```
+
+When sentinels are present, the `--type` flag is ignored (each sentinel specifies its own type). The `--id` flag cannot be used with multiple cells. Content before the first sentinel is ignored.
+
+When no sentinels are present, the source is treated as a single cell using `--type` (backward compatible).
 
 ## Update Cell
 

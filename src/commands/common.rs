@@ -99,19 +99,22 @@ pub fn find_cell_by_id_mut<'a>(
 /// Parse source text from a string or stdin (when input is "-")
 /// Returns a Vec<String> in Jupyter's line format
 pub fn parse_source(input: &str) -> Result<Vec<String>> {
-    let text = if input == "-" {
-        // Read from stdin
+    let text = parse_source_text(input)?;
+    Ok(split_source(&text))
+}
+
+/// Parse source text from a string or stdin (when input is "-")
+/// Returns the raw text string (without converting to Jupyter line format)
+pub fn parse_source_text(input: &str) -> Result<String> {
+    if input == "-" {
         let mut buffer = String::new();
         io::stdin()
             .read_to_string(&mut buffer)
             .context("Failed to read from stdin")?;
-        buffer
+        Ok(buffer)
     } else {
-        // Unescape common escape sequences
-        unescape_string(input)
-    };
-
-    Ok(split_source(&text))
+        Ok(unescape_string(input))
+    }
 }
 
 /// Unescape common escape sequences in a string
