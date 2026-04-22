@@ -11,6 +11,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  CROSS_VERSION: v0.2.5
 
 jobs:
   create-tag:
@@ -119,8 +120,10 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+
+      - name: Add Rust target (native builds)
+        if: matrix.target != 'aarch64-unknown-linux-musl'
+        run: rustup target add ${{ matrix.target }}
 
       - name: Install musl tools (Linux x86_64)
         if: matrix.target == 'x86_64-unknown-linux-musl'
@@ -128,26 +131,26 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y musl-tools
 
-      - name: Install cross-compilation tools (Linux ARM64 musl)
+      - name: Install cross (Linux ARM64 musl)
         if: matrix.target == 'aarch64-unknown-linux-musl'
         run: |
-          pip install ziglang
-          cargo install cargo-zigbuild --locked
+          dir="$RUNNER_TEMP/cross-download"
+          mkdir "$dir"
+          echo "$dir" >> $GITHUB_PATH
+          cd "$dir"
+          curl -LO "https://github.com/cross-rs/cross/releases/download/${{ env.CROSS_VERSION }}/cross-x86_64-unknown-linux-musl.tar.gz"
+          tar xf cross-x86_64-unknown-linux-musl.tar.gz
 
       - name: Build release binary (Linux ARM64 musl)
         if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: cargo zigbuild --release --target ${{ matrix.target }}
+        run: cross build --release --target ${{ matrix.target }}
 
       - name: Build release binary
         if: matrix.target != 'aarch64-unknown-linux-musl'
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Strip binary (Linux musl)
-        if: matrix.os == 'ubuntu-latest'
-        run: llvm-strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
-
-      - name: Strip binary (macOS)
-        if: matrix.os == 'macos-latest'
+      - name: Strip binary
+        if: matrix.os != 'windows-latest' && matrix.target != 'aarch64-unknown-linux-musl'
         run: strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
 
       - name: Upload artifact
