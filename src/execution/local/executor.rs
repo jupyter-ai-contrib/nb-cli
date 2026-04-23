@@ -1,4 +1,5 @@
 use super::discovery::find_kernel;
+use crate::commands::env_manager::EnvManager;
 use crate::execution::types::{ExecutionConfig, ExecutionError, ExecutionResult};
 use crate::execution::ExecutionBackend;
 use anyhow::{Context, Result};
@@ -6,6 +7,7 @@ use jupyter_protocol::{
     ConnectionInfo, ExecuteRequest, ExecutionState, JupyterKernelspec, JupyterMessage,
     JupyterMessageContent,
 };
+use std::ffi::OsStr;
 use std::path::PathBuf;
 
 /// Local execution backend using runtimelib
@@ -275,10 +277,48 @@ impl ExecutionBackend for LocalExecutor {
             .as_deref()
             .unwrap_or_else(|| std::path::Path::new("."));
 
-        // Launch kernel process
-        let mut process = kernel_spec
-            .command(&connection_path, None, None)
-            .context("Failed to create kernel command")?
+        // Launch kernel process, wrapping with env manager if needed
+        let env_manager = self
+            .config
+            .env_config
+            .as_ref()
+            .map(|c| c.manager)
+            .unwrap_or(EnvManager::Direct);
+
+        let mut cmd = match env_manager {
+            EnvManager::Direct => kernel_spec
+                .command(&connection_path, None, None)
+                .context("Failed to create kernel command")?,
+            EnvManager::Uv | EnvManager::Pixi => {
+                let argv = &kernel_spec.kernelspec.argv;
+                if argv.is_empty() {
+                    anyhow::bail!(
+                        "Kernel {} has empty argv in kernel.json",
+                        kernel_spec.kernel_name
+                    );
+                }
+
+                let wrapper = match env_manager {
+                    EnvManager::Uv => "uv",
+                    EnvManager::Pixi => "pixi",
+                    _ => unreachable!(),
+                };
+
+                let mut cmd = tokio::process::Command::new(wrapper);
+                cmd.arg("run");
+                for arg in argv {
+                    cmd.arg(if arg == "{connection_file}" {
+                        connection_path.as_os_str()
+                    } else {
+                        OsStr::new(arg)
+                    });
+                }
+
+                cmd
+            }
+        };
+
+        let mut process = cmd
             .current_dir(working_dir)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
