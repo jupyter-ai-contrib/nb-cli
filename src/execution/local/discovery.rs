@@ -31,56 +31,100 @@ pub fn find_kernel(
         "python3".to_string()
     };
 
-    // Try env-specific discovery first if env_config is provided
+    // Try env-specific discovery if env_config is provided
     if let Some(env_config) = env_config {
-        if let Some(spec_path) = find_kernelspec_in_env(&kernel_name, env_config)? {
-            return Ok((kernel_name.clone(), spec_path));
+        let manager_name = env_config.manager.as_str();
+        match find_kernelspec_in_env(&kernel_name, env_config) {
+            Ok(Some(spec_path)) => return Ok((kernel_name.clone(), spec_path)),
+            Ok(None) => {
+                // Kernel not found in env - fail explicitly with helpful message
+                let available = list_kernels_in_env(env_config).unwrap_or_default();
+                let available_str = if available.is_empty() {
+                    format!("No kernels were found in the {} environment.", manager_name)
+                } else {
+                    format!(
+                        "Available kernels in the {} environment:\n- {}",
+                        manager_name,
+                        available.join("\n- ")
+                    )
+                };
+
+                let cmd_name = command_context.unwrap_or("run");
+                return Err(anyhow!(
+                    "Could not discover kernel '{}' via `{} run jupyter kernelspec list --json`.\n\n\
+                     {}\n\n\
+                     This usually means Jupyter/kernels are not installed in the {} environment \
+                     for this project.\n\n\
+                     Next steps:\n\
+                     - install Jupyter/ipykernel in the {} environment, or\n\
+                     - rerun without --{} if you want to use globally available kernels:\n\
+                     \x20 nb {} --kernel {}",
+                    kernel_name,
+                    manager_name,
+                    available_str,
+                    manager_name,
+                    manager_name,
+                    manager_name,
+                    cmd_name,
+                    kernel_name,
+                ));
+            }
+            Err(e) => {
+                // Discovery command itself failed - surface the error
+                let cmd_name = command_context.unwrap_or("run");
+                return Err(anyhow!(
+                    "Failed to discover kernels via `{} run jupyter kernelspec list --json`:\n\
+                     {}\n\n\
+                     This usually means Jupyter is not installed in the {} environment \
+                     for this project.\n\n\
+                     Next steps:\n\
+                     - install Jupyter/ipykernel in the {} environment, or\n\
+                     - rerun without --{} if you want to use globally available kernels:\n\
+                     \x20 nb {} --kernel {}",
+                    manager_name,
+                    e,
+                    manager_name,
+                    manager_name,
+                    manager_name,
+                    cmd_name,
+                    kernel_name,
+                ));
+            }
         }
-        // If not found in env, fall through to global discovery
     }
 
-    // Try to find the kernel spec in global paths
+    // No env manager - use global kernel discovery
     match find_kernelspec(&kernel_name) {
         Some(spec_path) => Ok((kernel_name.clone(), spec_path)),
         None => {
             // Kernel not found - provide helpful error message
-            let available = list_available_kernels(env_config);
+            let available = list_available_kernels(None);
             let available_str = if available.is_empty() {
                 "No kernels found.".to_string()
             } else {
                 format!("Available kernels:\n- {}", available.join("\n- "))
             };
 
-            // Build environment-specific suggestions based on command context
-            let env_suggestions = if env_config.is_some() {
-                // Already using --uv or --pixi, no additional suggestions needed
-                String::new()
-            } else {
-                match command_context {
-                    Some("create") => "For kernels installed in virtual environments:\n\
-                         - use `nb create --uv` for uv\n\
-                         - use `nb create --pixi` for pixi"
-                        .to_string(),
-                    Some("execute") => "For kernels installed in virtual environments:\n\
-                         - use `nb execute --uv` for uv\n\
-                         - use `nb execute --pixi` for pixi"
-                        .to_string(),
-                    _ => {
-                        // No suggestions for other contexts (e.g., tests)
-                        String::new()
-                    }
+            let env_suggestions = match command_context {
+                Some("create") => {
+                    "\n\nFor kernels installed in virtual environments:\n\
+                     - use `nb create --uv` for uv\n\
+                     - use `nb create --pixi` for pixi"
                 }
+                Some("execute") => {
+                    "\n\nFor kernels installed in virtual environments:\n\
+                     - use `nb execute --uv` for uv\n\
+                     - use `nb execute --pixi` for pixi"
+                }
+                _ => "",
             };
 
-            let message = if env_suggestions.is_empty() {
-                format!("Kernel '{}' not found.\n\n{}", kernel_name, available_str)
-            } else {
-                format!(
-                    "Kernel '{}' not found.\n\n{}\n\n{}",
-                    kernel_name, available_str, env_suggestions
-                )
-            };
-            Err(anyhow!(message))
+            Err(anyhow!(
+                "Kernel '{}' not found.\n\n{}{}",
+                kernel_name,
+                available_str,
+                env_suggestions,
+            ))
         }
     }
 }
@@ -89,28 +133,42 @@ pub fn find_kernel(
 ///
 /// Uses `jupyter kernelspec list --json` executed via the environment manager
 /// to discover kernels installed in that environment.
+///
+/// Returns:
+/// - `Ok(Some(path))` if the kernel was found
+/// - `Ok(None)` if the command succeeded but the kernel wasn't listed
+/// - `Err(...)` if the discovery command itself failed
 fn find_kernelspec_in_env(name: &str, env_config: &EnvConfig) -> Result<Option<PathBuf>> {
+    let manager_name = env_config.manager.as_str();
     let mut cmd = env_config.build_jupyter_command(&["kernelspec", "list", "--json"]);
 
-    let output = match cmd.output() {
-        Ok(output) => output,
-        Err(_) => {
-            // If jupyter isn't available in the env, fall back to global discovery
-            return Ok(None);
-        }
-    };
+    let output = cmd
+        .output()
+        .map_err(|e| anyhow!("`{} run jupyter` is not available: {}", manager_name, e))?;
 
     if !output.status.success() {
-        // jupyter command failed, fall back to global discovery
-        return Ok(None);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!(
+            "`{} run jupyter kernelspec list --json` exited with {}{}",
+            manager_name,
+            output.status,
+            if stderr.trim().is_empty() {
+                String::new()
+            } else {
+                format!("\n{}", stderr.trim())
+            },
+        ));
     }
 
     // Parse JSON output
     let json_str = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value = match serde_json::from_str(&json_str) {
-        Ok(v) => v,
-        Err(_) => return Ok(None),
-    };
+    let json: serde_json::Value = serde_json::from_str(&json_str).map_err(|e| {
+        anyhow!(
+            "Failed to parse output from `{} run jupyter kernelspec list --json`: {}",
+            manager_name,
+            e
+        )
+    })?;
 
     // Extract kernelspecs
     if let Some(kernelspecs) = json.get("kernelspecs").and_then(|v| v.as_object()) {
