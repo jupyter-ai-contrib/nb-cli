@@ -313,6 +313,9 @@ impl ExecutionBackend for LocalExecutor {
                         OsStr::new(arg)
                     });
                 }
+                if let Some(env) = &kernel_spec.kernelspec.env {
+                    cmd.envs(env);
+                }
 
                 cmd
             }
