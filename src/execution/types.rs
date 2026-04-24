@@ -34,7 +34,7 @@ pub struct ExecutionConfig {
     /// Environment manager configuration (for local mode kernel discovery)
     pub env_config: Option<EnvConfig>,
 
-    /// Restart kernel before execution (remote mode, full notebook)
+    /// Restart kernel before execution (remote mode only; applies to any cell range)
     pub restart_kernel: bool,
 }
 

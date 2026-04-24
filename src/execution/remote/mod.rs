@@ -98,23 +98,18 @@ impl ExecutionBackend for RemoteExecutor {
         // Try to find and reuse existing session by notebook path
         let (session, created) = if let Some(ref notebook_path) = self.config.notebook_path {
             if let Some(existing) = sessions.iter().find(|s| s.path == *notebook_path) {
-                // Restart kernel if requested (full notebook execution)
+                // Restart kernel if requested
                 if self.config.restart_kernel {
-                    eprintln!("[debug] Restarting kernel: {}", existing.kernel.id);
-                    let restart_info = client
+                    client
                         .restart_kernel(&existing.kernel.id)
                         .await
                         .context("Failed to restart kernel")?;
-                    eprintln!(
-                        "[debug] Restart response: state={}",
-                        restart_info.execution_state
-                    );
-                    // Wait for kernel to be ready
+                    // Wait for kernel to be ready using short-interval polling with backoff
                     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+                    let mut poll_ms = 200u64;
                     loop {
-                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        tokio::time::sleep(std::time::Duration::from_millis(poll_ms)).await;
                         let info = client.get_kernel(&existing.kernel.id).await?;
-                        eprintln!("[debug] Kernel state: {}", info.execution_state);
                         if info.execution_state == "idle" {
                             break;
                         }
@@ -123,11 +118,15 @@ impl ExecutionBackend for RemoteExecutor {
                                 "Timeout waiting for kernel to become ready after restart"
                             );
                         }
+                        poll_ms = (poll_ms * 2).min(5_000);
                     }
                 }
                 // Return the existing session directly - no new session/kernel creation
                 (existing.clone(), false)
             } else {
+                if self.config.restart_kernel {
+                    eprintln!("No existing session found; new kernel will start clean.");
+                }
                 let s = client
                     .create_session(notebook_path, kernel_name)
                     .await
