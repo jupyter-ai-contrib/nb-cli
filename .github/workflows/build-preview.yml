@@ -1,0 +1,171 @@
+name: Build Preview Binary
+
+# Manually triggered from any branch to produce a downloadable Windows binary
+# for testing purposes. Creates a GitHub pre-release with the binary attached.
+# Pre-releases can be deleted once testing is complete.
+
+on:
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: 'Platforms to build'
+        required: true
+        default: 'windows'
+        type: choice
+        options:
+          - windows
+          - all
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset_name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: nb.exe
+            asset_name: nb-windows-amd64.exe
+            enabled_for: windows all
+
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: nb
+            asset_name: nb-macos-arm64
+            enabled_for: all
+
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: nb
+            asset_name: nb-macos-amd64
+            enabled_for: all
+
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact_name: nb
+            asset_name: nb-linux-amd64
+            enabled_for: all
+
+    steps:
+    - name: Skip if platform not selected
+      if: ${{ !contains(matrix.enabled_for, inputs.platforms) }}
+      run: echo "Skipping ${{ matrix.asset_name }} (not selected)" && exit 0
+      shell: bash
+
+    - uses: actions/checkout@v4
+
+    - name: Set up Rust cache
+      if: ${{ contains(matrix.enabled_for, inputs.platforms) }}
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+    - name: Install Rust toolchain
+      if: ${{ contains(matrix.enabled_for, inputs.platforms) }}
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Add Rust target
+      if: ${{ contains(matrix.enabled_for, inputs.platforms) }}
+      run: rustup target add ${{ matrix.target }}
+
+    - name: Install musl tools (Linux)
+      if: ${{ contains(matrix.enabled_for, inputs.platforms) && matrix.target == 'x86_64-unknown-linux-musl' }}
+      run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+    - name: Build release binary
+      if: ${{ contains(matrix.enabled_for, inputs.platforms) }}
+      run: cargo build --release --target ${{ matrix.target }}
+
+    - name: Strip binary (non-Windows)
+      if: ${{ contains(matrix.enabled_for, inputs.platforms) && matrix.os != 'windows-latest' }}
+      run: strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+
+    - name: Upload artifact
+      if: ${{ contains(matrix.enabled_for, inputs.platforms) }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.asset_name }}
+        path: target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+
+  create-prerelease:
+    name: Create Pre-release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Prepare assets
+      run: |
+        mkdir -p release-assets
+        for dir in artifacts/*/; do
+          asset_name=$(basename "$dir")
+          cp "$dir"/* "release-assets/$asset_name"
+        done
+        chmod +x release-assets/nb-* 2>/dev/null || true
+        ls -lh release-assets/
+
+    - name: Generate checksums
+      run: |
+        cd release-assets
+        sha256sum * > SHA256SUMS || shasum -a 256 * > SHA256SUMS
+        cat SHA256SUMS
+
+    - name: Create pre-release tag
+      id: tag
+      run: |
+        SHA=$(git rev-parse --short HEAD)
+        BRANCH="${GITHUB_REF_NAME//\//-}"
+        TAG="preview-${BRANCH}-${SHA}"
+        echo "tag=${TAG}" >> $GITHUB_OUTPUT
+        echo "Preview tag: ${TAG}"
+
+    - name: Publish pre-release
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh release create "${{ steps.tag.outputs.tag }}" \
+          --prerelease \
+          --title "Preview: ${{ github.ref_name }} (${{ github.sha }})" \
+          --notes "$(cat <<'EOF'
+        **Preview build** from branch \`${{ github.ref_name }}\` for testing purposes.
+
+        This is **not** an official release. Delete once testing is complete.
+
+        ### Install on Windows
+        1. Download \`nb-windows-amd64.exe\`
+        2. Rename it to \`nb.exe\` and place it somewhere on your \`PATH\` (e.g. \`C:\Windows\System32\` or a folder in your user profile)
+        3. Open a new terminal and run \`nb --version\` to verify
+
+        ### Verify integrity
+        Check the \`SHA256SUMS\` file to verify the download.
+        EOF
+        )" \
+          release-assets/*
+
+    - name: Summary
+      run: |
+        echo "## ✅ Preview build published" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Branch**: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Tag**: \`${{ steps.tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Release**: https://github.com/${{ github.repository }}/releases/tag/${{ steps.tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
