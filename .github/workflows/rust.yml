@@ -79,6 +79,8 @@ jobs:
   test-windows:
     name: Test (Windows)
     runs-on: windows-latest
+    permissions:
+      contents: write
 
     steps:
     - uses: actions/checkout@v4
@@ -96,11 +98,21 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-
 
-    - name: Build
-      run: cargo build --verbose
+    - name: Install Rust target
+      run: rustup target add x86_64-pc-windows-msvc
+
+    - name: Build release binary
+      run: cargo build --release --target x86_64-pc-windows-msvc
 
     - name: Run unit tests (kernel discovery)
       # Integration tests require a Unix shell setup script; run unit tests only.
       # This verifies Windows-specific #[cfg(target_os = "windows")] code paths compile
       # and that kernel directory logic is correct on Windows.
       run: cargo test --bins --verbose
+
+    - name: Upload Windows binary
+      uses: actions/upload-artifact@v4
+      with:
+        name: nb-windows-amd64
+        path: target/x86_64-pc-windows-msvc/release/nb.exe
+        retention-days: 30
