@@ -215,7 +215,11 @@ mod tests {
         .unwrap()
     }
 
-    fn get_output_map(outputs_arr: &yrs::ArrayRef, txn: &impl yrs::ReadTxn, idx: u32) -> yrs::MapRef {
+    fn get_output_map(
+        outputs_arr: &yrs::ArrayRef,
+        txn: &impl yrs::ReadTxn,
+        idx: u32,
+    ) -> yrs::MapRef {
         outputs_arr
             .get(txn, idx)
             .unwrap()
@@ -342,7 +346,10 @@ mod tests {
         let (doc, cells) = setup_doc();
         let mut txn = doc.transact_mut();
         let result = update_cell_outputs(&mut txn, &cells, 99, &[]);
-        assert!(result.is_err(), "cell_index=99 on 1-cell doc must return Err");
+        assert!(
+            result.is_err(),
+            "cell_index=99 on 1-cell doc must return Err"
+        );
     }
 
     #[test]

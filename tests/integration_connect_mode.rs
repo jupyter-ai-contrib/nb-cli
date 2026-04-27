@@ -431,10 +431,14 @@ fn test_connect_manual_saves_config() {
     );
 
     let config_path = ctx.work_dir.path().join(".jupyter").join("cli.json");
-    assert!(config_path.exists(), ".jupyter/cli.json must exist after connect");
+    assert!(
+        config_path.exists(),
+        ".jupyter/cli.json must exist after connect"
+    );
 
     let content = fs::read_to_string(&config_path).expect("Failed to read config");
-    let json: serde_json::Value = serde_json::from_str(&content).expect("Config must be valid JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(&content).expect("Config must be valid JSON");
     assert_eq!(
         json["connection"]["server_url"].as_str(),
         Some(ctx.info.server_url.as_str()),
@@ -492,7 +496,9 @@ fn test_status_validate_live_connection() {
     ])
     .assert_success();
 
-    let result = ctx.run_in_workdir(&["status", "--validate"]).assert_success();
+    let result = ctx
+        .run_in_workdir(&["status", "--validate"])
+        .assert_success();
     assert!(
         result.stdout.contains("✓ Connection is valid"),
         "Expected '✓ Connection is valid'\nStdout: {}",
@@ -519,7 +525,9 @@ fn test_status_validate_dead_connection() {
     ])
     .assert_success();
 
-    let result = ctx.run_in_workdir(&["status", "--validate"]).assert_success();
+    let result = ctx
+        .run_in_workdir(&["status", "--validate"])
+        .assert_success();
     assert!(
         result.stdout.contains("✗ Connection failed"),
         "Expected '✗ Connection failed'\nStdout: {}",
@@ -548,7 +556,9 @@ fn test_disconnect_and_reannotate_status() {
 
     let result = ctx.run_in_workdir(&["status"]).assert_success();
     assert!(
-        result.stdout.contains("Not connected to any Jupyter server"),
+        result
+            .stdout
+            .contains("Not connected to any Jupyter server"),
         "Expected 'Not connected' after disconnect\nStdout: {}",
         result.stdout
     );
@@ -594,17 +604,25 @@ fn test_remote_execute_error_shows_partial_results() {
         return;
     };
 
-    let nb_path = ctx.copy_fixture("for_connect_error_stop.ipynb", "test_remote_error_stop.ipynb");
+    let nb_path = ctx.copy_fixture(
+        "for_connect_error_stop.ipynb",
+        "test_remote_error_stop.ipynb",
+    );
 
     let result = ctx
         .run(&["execute", nb_path.to_str().unwrap(), "--json"])
         .assert_failure();
 
-    let json: serde_json::Value =
-        serde_json::from_str(&result.stdout).expect("--json output must be valid JSON even on error");
-    assert_eq!(json["success"], false, "success must be false when a cell raises");
+    let json: serde_json::Value = serde_json::from_str(&result.stdout)
+        .expect("--json output must be valid JSON even on error");
+    assert_eq!(
+        json["success"], false,
+        "success must be false when a cell raises"
+    );
 
-    let cells = json["cells"].as_array().expect("JSON must have 'cells' array");
+    let cells = json["cells"]
+        .as_array()
+        .expect("JSON must have 'cells' array");
     let code_cells: Vec<_> = cells.iter().filter(|c| c["cell_type"] == "code").collect();
     assert_eq!(code_cells.len(), 3, "Fixture has 3 code cells");
 
@@ -650,11 +668,18 @@ fn test_remote_execute_json_includes_outputs() {
         serde_json::from_str(&result.stdout).expect("--json must produce valid JSON");
 
     assert_eq!(json["success"], true);
-    let cells = json["cells"].as_array().expect("JSON must have 'cells' array");
+    let cells = json["cells"]
+        .as_array()
+        .expect("JSON must have 'cells' array");
     let code_cells: Vec<_> = cells.iter().filter(|c| c["cell_type"] == "code").collect();
     let last = code_cells.last().expect("Must have at least one code cell");
-    let outputs = last["outputs"].as_array().expect("Last cell must have outputs");
-    assert!(!outputs.is_empty(), "Remote execution must capture cell outputs in JSON");
+    let outputs = last["outputs"]
+        .as_array()
+        .expect("Last cell must have outputs");
+    assert!(
+        !outputs.is_empty(),
+        "Remote execution must capture cell outputs in JSON"
+    );
 
     let output_text = serde_json::to_string(outputs).unwrap();
     assert!(
@@ -678,7 +703,12 @@ fn test_execute_with_bad_token_fails() {
 
     Command::new(&ctx.info.binary_path)
         .args(["execute", nb_path.to_str().unwrap()])
-        .args(["--server", &ctx.info.server_url, "--token", "wrong_token_xyz"])
+        .args([
+            "--server",
+            &ctx.info.server_url,
+            "--token",
+            "wrong_token_xyz",
+        ])
         .current_dir(&ctx.info.server_root)
         .env("PATH", &ctx.info.venv_path_env)
         .env("VIRTUAL_ENV", &ctx.info.venv_root)
@@ -743,8 +773,7 @@ fn test_connect_with_bad_credentials_fails() {
     assert!(
         !result.success,
         "connect with wrong token must exit non-zero\nStdout: {}\nStderr: {}",
-        result.stdout,
-        result.stderr
+        result.stdout, result.stderr
     );
 
     let config_path = ctx.work_dir.path().join(".jupyter").join("cli.json");
@@ -803,7 +832,9 @@ fn test_remote_execute_cell_range() {
         serde_json::from_str(&result.stdout).expect("--json must produce valid JSON");
     assert_eq!(json["success"], true);
 
-    let cells = json["cells"].as_array().expect("JSON must have 'cells' array");
+    let cells = json["cells"]
+        .as_array()
+        .expect("JSON must have 'cells' array");
 
     // Navigate to the last code cell — that's `print(a)` which must have produced "1".
     // (Do NOT use `contains('1')` on the full JSON: execution_count and cell indices

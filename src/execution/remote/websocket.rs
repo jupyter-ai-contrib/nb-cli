@@ -338,9 +338,11 @@ mod tests {
         let offset_start = 8 + 4 * 8;
         let content_offset =
             u64::from_le_bytes(bytes[offset_start..offset_start + 8].try_into().unwrap()) as usize;
-        let end_offset =
-            u64::from_le_bytes(bytes[offset_start + 8..offset_start + 16].try_into().unwrap())
-                as usize;
+        let end_offset = u64::from_le_bytes(
+            bytes[offset_start + 8..offset_start + 16]
+                .try_into()
+                .unwrap(),
+        ) as usize;
         // Overwrite content with invalid JSON
         for b in bytes[content_offset..end_offset].iter_mut() {
             *b = b'!';
@@ -363,9 +365,8 @@ mod tests {
         let ph_start =
             u64::from_le_bytes(bytes[offset2_start..offset2_start + 8].try_into().unwrap())
                 as usize;
-        let ph_end =
-            u64::from_le_bytes(bytes[offset3_start..offset3_start + 8].try_into().unwrap())
-                as usize;
+        let ph_end = u64::from_le_bytes(bytes[offset3_start..offset3_start + 8].try_into().unwrap())
+            as usize;
 
         // Replace parent_header bytes with zeros (empty = 0 bytes won't work directly
         // because offset table still marks the range; fill with a 0-byte slice by
@@ -423,9 +424,11 @@ mod tests {
         let bytes = KernelWebSocket::serialize_to_binary(&msg, "shell").unwrap();
 
         // Read offset_count from the first 8 bytes
-        let offset_count =
-            u64::from_le_bytes(bytes[0..8].try_into().unwrap()) as usize;
-        assert_eq!(offset_count, 6, "Expected 6 offsets (channel + 4 frames + end)");
+        let offset_count = u64::from_le_bytes(bytes[0..8].try_into().unwrap()) as usize;
+        assert_eq!(
+            offset_count, 6,
+            "Expected 6 offsets (channel + 4 frames + end)"
+        );
 
         // Read all offsets
         let offsets: Vec<usize> = (0..offset_count)
@@ -454,11 +457,31 @@ mod tests {
         let metadata_bytes = serde_json::to_vec(&msg.metadata).unwrap();
         let content_bytes = serde_json::to_vec(&msg.content).unwrap();
 
-        assert_eq!(section_lengths[0], channel_bytes.len(), "channel length mismatch");
-        assert_eq!(section_lengths[1], header_bytes.len(), "header length mismatch");
-        assert_eq!(section_lengths[2], parent_header_bytes.len(), "parent_header length mismatch");
-        assert_eq!(section_lengths[3], metadata_bytes.len(), "metadata length mismatch");
-        assert_eq!(section_lengths[4], content_bytes.len(), "content length mismatch");
+        assert_eq!(
+            section_lengths[0],
+            channel_bytes.len(),
+            "channel length mismatch"
+        );
+        assert_eq!(
+            section_lengths[1],
+            header_bytes.len(),
+            "header length mismatch"
+        );
+        assert_eq!(
+            section_lengths[2],
+            parent_header_bytes.len(),
+            "parent_header length mismatch"
+        );
+        assert_eq!(
+            section_lengths[3],
+            metadata_bytes.len(),
+            "metadata length mismatch"
+        );
+        assert_eq!(
+            section_lengths[4],
+            content_bytes.len(),
+            "content length mismatch"
+        );
     }
 
     proptest::proptest! {

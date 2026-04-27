@@ -365,7 +365,10 @@ mod tests {
     #[test]
     fn test_is_binary_mime_type_svg_exception() {
         // SVG is rendered as text despite the image/ prefix — document this quirk
-        assert!(!is_binary_mime_type("image/svg+xml"), "SVG must not be binary");
+        assert!(
+            !is_binary_mime_type("image/svg+xml"),
+            "SVG must not be binary"
+        );
         assert!(is_binary_mime_type("image/png"), "PNG must be binary");
         assert!(is_binary_mime_type("image/jpeg"), "JPEG must be binary");
         assert!(is_binary_mime_type("application/pdf"), "PDF must be binary");

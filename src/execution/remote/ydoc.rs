@@ -483,13 +483,14 @@ pub(crate) fn read_cell_outputs_from_doc(doc: &Doc, cell_index: usize) -> Result
         .map_err(|_| anyhow::anyhow!("Cell is not a Map"))?;
 
     // Read execution_count
-    let execution_count = cell_map
-        .get(&txn, "execution_count")
-        .and_then(|v| match v.to_json(&txn) {
-            yrs::Any::BigInt(n) => Some(n),
-            yrs::Any::Number(n) => Some(n as i64),
-            _ => None,
-        });
+    let execution_count =
+        cell_map
+            .get(&txn, "execution_count")
+            .and_then(|v| match v.to_json(&txn) {
+                yrs::Any::BigInt(n) => Some(n),
+                yrs::Any::Number(n) => Some(n as i64),
+                _ => None,
+            });
 
     // Read outputs array — collect externalized (have metadata.url) and inline outputs
     let mut urls: Vec<(usize, String)> = Vec::new();
@@ -585,11 +586,7 @@ mod tests {
         // Insert a code cell
         cells.insert(&mut txn, 0, yrs::MapPrelim::from([("cell_type", "code")]));
         // Get the cell's outputs array and insert the output
-        let cell_map = cells
-            .get(&txn, 0)
-            .unwrap()
-            .cast::<yrs::MapRef>()
-            .unwrap();
+        let cell_map = cells.get(&txn, 0).unwrap().cast::<yrs::MapRef>().unwrap();
         let outputs_arr: yrs::ArrayRef =
             cell_map.insert(&mut txn, "outputs", yrs::ArrayPrelim::default());
         outputs_arr.insert(&mut txn, 0, output_map);
@@ -611,7 +608,11 @@ mod tests {
         let doc = doc_with_cell_output(output_map);
 
         let result = read_cell_outputs_from_doc(&doc, 0).unwrap();
-        assert_eq!(result.inline_outputs.len(), 1, "should have 1 inline output");
+        assert_eq!(
+            result.inline_outputs.len(),
+            1,
+            "should have 1 inline output"
+        );
         assert!(
             result.externalized_urls.is_empty(),
             "should have no externalized URLs"
@@ -637,7 +638,10 @@ mod tests {
         let doc = doc_with_cell_output(output_prelim);
 
         let result = read_cell_outputs_from_doc(&doc, 0).unwrap();
-        assert!(result.inline_outputs.is_empty(), "should have no inline outputs");
+        assert!(
+            result.inline_outputs.is_empty(),
+            "should have no inline outputs"
+        );
         assert_eq!(
             result.externalized_urls.len(),
             1,

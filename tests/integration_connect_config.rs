@@ -120,7 +120,9 @@ fn test_status_when_not_connected() {
     let env = ConfigTestEnv::new();
     let result = env.run(&["status"]).assert_success();
     assert!(
-        result.stdout.contains("Not connected to any Jupyter server"),
+        result
+            .stdout
+            .contains("Not connected to any Jupyter server"),
         "Expected 'Not connected' message\nStdout: {}",
         result.stdout
     );
@@ -230,7 +232,9 @@ fn test_disconnect_when_connected() {
     );
 
     // Config should still exist but connection should be null
-    let config = env.read_config().expect("Config file should still exist after disconnect");
+    let config = env
+        .read_config()
+        .expect("Config file should still exist after disconnect");
     assert!(
         config["connection"].is_null(),
         "connection should be null after disconnect\nConfig: {}",
@@ -243,7 +247,9 @@ fn test_disconnect_when_not_connected() {
     let env = ConfigTestEnv::new();
     let result = env.run(&["disconnect"]).assert_success();
     assert!(
-        result.stdout.contains("Not connected to any Jupyter server"),
+        result
+            .stdout
+            .contains("Not connected to any Jupyter server"),
         "Expected not-connected message\nStdout: {}",
         result.stdout
     );
@@ -258,7 +264,9 @@ fn test_status_after_disconnect() {
     let result = env.run(&["status"]).assert_success();
 
     assert!(
-        result.stdout.contains("Not connected to any Jupyter server"),
+        result
+            .stdout
+            .contains("Not connected to any Jupyter server"),
         "Expected 'Not connected' after disconnect\nStdout: {}",
         result.stdout
     );
@@ -276,8 +284,7 @@ fn test_status_with_malformed_config_json() {
     assert!(
         !result.success,
         "malformed config must cause a non-zero exit\nStdout: {}\nStderr: {}",
-        result.stdout,
-        result.stderr
+        result.stdout, result.stderr
     );
     assert!(
         !result.stderr.is_empty(),
@@ -296,7 +303,6 @@ fn test_status_with_incomplete_connection_object() {
     assert!(
         !result.success,
         "incomplete connection object must cause a non-zero exit\nStdout: {}\nStderr: {}",
-        result.stdout,
-        result.stderr
+        result.stdout, result.stderr
     );
 }
