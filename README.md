@@ -44,21 +44,21 @@ Large outputs        →  Externalized to files, path in @@output JSON
 
 ## Installation
 
+### Install from crates.io
+
+```bash
+cargo install nb-cli
+```
+
 ### Quick Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jupyter-ai-contrib/nb-cli/main/install.sh | bash
 ```
 
-This installs the binary to `~/.nb-cli/bin/nb`. Follow the instructions to add it to your PATH.
+This installs the binary to `~/.nb-cli/bin/nb`. Review the script before running it in sensitive environments, then follow the instructions to add it to your PATH.
 
 **Note**: If you get an error while installation, where your platform is not supported, please use `cargo install` or build from source.
-
-### Install from crates.io
-
-```bash
-cargo install nb-cli
-```
 
 ### Build from Source
 
@@ -177,13 +177,11 @@ nb connect --pixi  # Detect servers running via pixi
 When working with isolated project environments (uv or pixi), use these flags to discover Jupyter servers running within those environments. The CLI will automatically detect your project root and run `jupyter server list` through the appropriate environment manager.
 
 **Manual connection:**
-```bash
-nb connect --server http://localhost:8888 --token your-jupyter-token
-```
+If auto-detection cannot find the server, run `nb connect --help` and provide the server URL and token locally. Avoid pasting authentication tokens into shared prompts, logs, or issue comments.
 
 **Connection options:**
 - `--server`: Server URL (e.g., `http://localhost:8888`)
-- `--token`: Authentication token from Jupyter
+- `--token`: Jupyter authentication value for manual connection
 - `--uv`: Use uv to run jupyter commands (mutually exclusive with `--pixi`)
 - `--pixi`: Use pixi to run jupyter commands (mutually exclusive with `--uv`)
 
@@ -240,7 +238,7 @@ nb disconnect
 | `nb cell delete <path> --cell-index <index>` | Delete a cell |
 | `nb execute <path> --cell-index <index>` | Execute a specific cell |
 | `nb output clear <path>` | Clear cell outputs |
-| `nb connect [--server URL --token TOKEN] [--uv\|--pixi]` | Connect to Jupyter server (auto-detects if no args) |
+| `nb connect [--uv\|--pixi]` | Connect to Jupyter server (auto-detects if no args) |
 | `nb status` | Show current connection status |
 | `nb disconnect` | Disconnect from server |
 
