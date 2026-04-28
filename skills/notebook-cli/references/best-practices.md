@@ -29,12 +29,29 @@ Create a computational narrative with clear beginning, middle, and end:
 - Record why you chose specific parameter values
 - Explain what made intermediate results interesting
 
-### Use Markdown Effectively
-- Place markdown cells **before** code cells to explain what follows
-- Use descriptive headers to organize notebooks into sections
-- Create a table of contents for longer notebooks (>100 lines)
+### Use Markdown Generously
+A header alone is not a markdown cell. Every markdown cell before a code section should contain a heading **and** 1–3 sentences of prose explaining what the code does, why it matters, or what the reader should look for in the output. Treat markdown cells as the connective tissue of the notebook — without them, the reader is left guessing at intent.
+
+**Minimum per markdown cell**: a heading plus at least one sentence of context.
+
+**Good**:
+```markdown
+## Filter to Active Stations
+
+Not all stations reported continuously. Keep only those with at least 360
+daily readings in the past year so that seasonal averages are meaningful.
+```
+
+**Too thin**:
+```markdown
+## Filter to Active Stations
+```
+
+Additional guidelines:
+- Place markdown cells **before** code cells to set up what follows
+- Use descriptive headers that convey the *purpose*, not just the topic (e.g., "Remove outliers to stabilize the rolling mean" rather than "Outliers")
+- Create a table of contents for longer notebooks (>100 lines of code)
 - Include equations, links, and figures where appropriate
-- Ensure markdown accurately describes the associated code
 
 ---
 
@@ -118,30 +135,45 @@ nb execute notebook.ipynb --cell-index 1
 nb execute notebook.ipynb
 ```
 
-### Add Cells in Bulk, Not One at a Time
+### Add Cells in Batches by Logical Section
 
-Use multi-cell sentinels (`@@code`, `@@markdown`, `@@raw`) to add all related cells in a single `nb cell add` call. Do NOT add cells one by one in separate commands — it is slower and produces unnecessary tool calls. Plan the full section of cells, then add them together:
+Use multi-cell sentinels (`@@code`, `@@markdown`, `@@raw`) to add cells in batches of roughly 3–5 cells, grouped by logical section (e.g., "Setup", "Data Loading", "Analysis"). Do NOT add cells one by one — it is too slow. Do NOT add the entire notebook in a single call — it increases latency, makes errors harder to find, and delays feedback.
+
+**Workflow**: Add a section → execute it → verify → add the next section.
 
 ```bash
+# Section 1: Setup (create notebook, then add intro + dependencies)
+nb create notebook.ipynb
 nb cell add notebook.ipynb -s '@@markdown
-# Matplotlib Tutorial
+# Weather Station Analysis
 
-This notebook demonstrates core plotting concepts with matplotlib.
+Explore daily temperature readings from regional weather stations to
+identify seasonal trends and detect stations with incomplete coverage.
 @@code
-%pip install matplotlib numpy
-@@markdown
-## Basic Line Plot
+%pip install pandas requests'
 
-Create a simple sine wave to demonstrate `plt.plot()`.
+# Execute setup to catch dependency errors early
+nb execute notebook.ipynb
+
+# Section 2: Data loading
+nb cell add notebook.ipynb -s '@@markdown
+## Load Station Data
+
+Read the CSV export and parse dates upfront so that time-based grouping
+works correctly in later cells.
 @@code
-import matplotlib.pyplot as plt
-import numpy as np
+import pandas as pd
 
-x = np.linspace(0, 10, 100)
-plt.plot(x, np.sin(x))
-plt.title("Sine Wave")
-plt.show()'
+df = pd.read_csv("stations.csv", parse_dates=["date"])
+df.head()
+@@code
+print(f"Stations: {df[\"station_id\"].nunique()}, Records: {len(df)}")'
+
+# Execute and verify
+nb execute notebook.ipynb --start 2
 ```
+
+A section might be 2 cells or 6 — match the logical grouping rather than a rigid count.
 
 ---
 
