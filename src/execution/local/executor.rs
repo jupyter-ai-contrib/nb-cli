@@ -111,11 +111,11 @@ impl LocalExecutor {
             }
 
             match message.content {
-                JupyterMessageContent::Status(status) => {
-                    if status.execution_state == ExecutionState::Idle {
-                        // Execution complete on IOPub
-                        break;
-                    }
+                JupyterMessageContent::Status(status)
+                    if status.execution_state == ExecutionState::Idle =>
+                {
+                    // Execution complete on IOPub
+                    break;
                 }
                 JupyterMessageContent::StreamContent(stream) => {
                     // Convert to nbformat output
