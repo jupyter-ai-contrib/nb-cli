@@ -6,8 +6,9 @@ This document synthesizes research-based best practices for creating high-qualit
 1. [Narrative and Documentation](#narrative-and-documentation)
 2. [Code Organization](#code-organization)
 3. [Code Quality and Style](#code-quality-and-style)
-4. [Execution and Reproducibility](#execution-and-reproducibility)
-5. [Naming Conventions](#naming-conventions)
+4. [Dependency Management](#dependency-management)
+5. [Execution and Reproducibility](#execution-and-reproducibility)
+6. [Naming Conventions](#naming-conventions)
 
 ---
 
@@ -97,7 +98,54 @@ Hidden state occurs when execution state doesn't match visible code:
 - Use execution counter continuity as a quality check
 ---
 
-## 4. Execution and Reproducibility
+## 4. Dependency Management
+
+### Install Dependencies Inside the Notebook
+
+**NEVER** install packages by running `pip install` or `python -m pip install` in the shell. This makes the notebook non-reproducible for other users. Instead, add a code cell near the top of the notebook using `%pip install` (the IPython magic), which always targets the correct kernel environment:
+
+```bash
+nb cell add notebook.ipynb -s '@@markdown
+## Setup
+@@code
+%pip install matplotlib numpy pandas' --insert-at 0
+```
+
+Then execute the setup cell before running the rest of the notebook:
+
+```bash
+nb execute notebook.ipynb --cell-index 1
+nb execute notebook.ipynb
+```
+
+### Add Cells in Bulk, Not One at a Time
+
+Use multi-cell sentinels (`@@code`, `@@markdown`, `@@raw`) to add all related cells in a single `nb cell add` call. Do NOT add cells one by one in separate commands — it is slower and produces unnecessary tool calls. Plan the full section of cells, then add them together:
+
+```bash
+nb cell add notebook.ipynb -s '@@markdown
+# Matplotlib Tutorial
+
+This notebook demonstrates core plotting concepts with matplotlib.
+@@code
+%pip install matplotlib numpy
+@@markdown
+## Basic Line Plot
+
+Create a simple sine wave to demonstrate `plt.plot()`.
+@@code
+import matplotlib.pyplot as plt
+import numpy as np
+
+x = np.linspace(0, 10, 100)
+plt.plot(x, np.sin(x))
+plt.title("Sine Wave")
+plt.show()'
+```
+
+---
+
+## 5. Execution and Reproducibility
 
 ### Execute Cells in Order
 Design notebooks to execute sequentially from top to bottom:
@@ -131,7 +179,7 @@ Design notebooks to execute sequentially from top to bottom:
 
 ---
 
-## 5. Naming Conventions
+## 6. Naming Conventions
 
 ### Use Meaningful Notebook Names
 Give notebooks descriptive, professional names:

@@ -14,6 +14,11 @@ Use `nb` for every `.ipynb` operation. Do not read, write, patch, or edit notebo
 - Prefer cell IDs (`--cell` / `-c`) for durable edits after inspecting a notebook. Use indexes (`--cell-index` / `-i`) for quick positional work; negative indexes are supported.
 - Use `--no-output` when summarizing structure or source. Include outputs only when diagnosing results, failures, plots, or displayed values.
 - Use stdin (`--source -`) for multi-line or quoted content to avoid shell escaping mistakes.
+- If the user specifies `uv` or the workspace is clearly a `uv` project, treat `uv` as the notebook execution environment for the whole task. Use `--uv` on `nb` commands that support it, such as `nb create` and `nb execute`.
+- When creating a notebook with several sections, prefer one multi-cell `nb cell add <notebook> --source -` operation with `@@markdown` and `@@code` sentinels instead of many one-cell add commands.
+- When notebook code depends on third-party packages, add a dependency-install cell at the top of the notebook before imports if package availability is uncertain.
+- If a `uv` environment is present, the dependency cell should use `!uv pip install ...`.
+- If a `uv` environment is not present, the dependency cell should use `%pip install ...`.
 - Run `nb <command> --help` or `nb cell <subcommand> --help` when command syntax is uncertain.
 - In connected mode, let `nb` use the saved connection from `nb connect`. Do not write secret tokens into commands, prompts, logs, or examples; if auto-detection is unavailable, ask the user to establish the connection manually.
 - Before running non-notebook Python commands that should match the active notebook environment, use `nb status --python` and run commands through the returned prefix.
