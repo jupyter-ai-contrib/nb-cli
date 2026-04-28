@@ -92,6 +92,10 @@ nb output clean
 
 Read [references/output-format.md](references/output-format.md) for sentinel parsing, externalized output files, clearing outputs, and commit hygiene.
 
+### Author Quality Notebooks
+
+Read [references/best-practices.md](references/best-practices.md) for research-based guidelines on narrative structure, code organization, reproducibility, and naming conventions when creating or reviewing notebooks.
+
 ## Permission Note
 
 If the agent cannot run `nb` or connected-mode commands because of sandbox policy, ask the user to allow the needed command. For recurring use, the project or user rules should allow the `nb` command prefix.
