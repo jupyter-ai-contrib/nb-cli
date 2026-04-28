@@ -15,7 +15,8 @@ Use `nb` for every `.ipynb` operation. Do not read, write, patch, or edit notebo
 - Use `--no-output` when summarizing structure or source. Include outputs only when diagnosing results, failures, plots, or displayed values.
 - Use stdin (`--source -`) for multi-line or quoted content to avoid shell escaping mistakes.
 - If the user specifies `uv` or the workspace is clearly a `uv` project, treat `uv` as the notebook execution environment for the whole task. Use `--uv` on `nb` commands that support it, such as `nb create` and `nb execute`.
-- When creating a notebook with several sections, prefer one multi-cell `nb cell add <notebook> --source -` operation with `@@markdown` and `@@code` sentinels instead of many one-cell add commands.
+- When creating a notebook with several sections, add cells in batches of roughly 3–5 cells grouped by logical section using multi-cell sentinels (`@@markdown`, `@@code`). Execute and verify each batch before adding the next. Do not add the entire notebook in one call — it increases latency and makes errors harder to catch.
+- Every markdown cell must contain a heading **and** at least one sentence of prose explaining what the following code does or why it matters. A bare heading is not sufficient — see [best-practices.md](references/best-practices.md#use-markdown-generously).
 - When notebook code depends on third-party packages, add a dependency-install cell at the top of the notebook before imports if package availability is uncertain.
 - If a `uv` environment is present, the dependency cell should use `!uv pip install ...`.
 - If a `uv` environment is not present, the dependency cell should use `%pip install ...`.

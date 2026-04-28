@@ -35,6 +35,8 @@ Default cell type is code. Use `--id` only when a caller requires a specific cel
 
 ## Add Multiple Cells
 
+Add cells in batches of roughly 3–5, grouped by logical section (e.g., setup, data loading, analysis). Execute and verify each batch before adding the next. See [best-practices.md](best-practices.md#add-cells-in-batches-by-logical-section) for the full workflow.
+
 Start the source with a sentinel line. Multi-cell mode activates only when the first non-empty line is a sentinel, so sentinel-like text inside normal content is preserved.
 
 ```bash
