@@ -1,7 +1,0 @@
-interface:
-  display_name: "Notebook CLI"
-  short_description: "Work with Jupyter notebooks through nb"
-  default_prompt: "Use $notebook-cli to inspect, edit, or execute a Jupyter notebook with the nb command-line tool."
-
-policy:
-  allow_implicit_invocation: true
