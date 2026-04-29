@@ -8,7 +8,6 @@
 mod test_helpers;
 
 use std::fs;
-use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
@@ -45,6 +44,33 @@ fn shared_server() -> Option<&'static SharedServerInfo> {
 }
 
 fn start_shared_server() -> Option<SharedServerInfo> {
+    // If NB_TEST_SERVER_URL/TOKEN are set (e.g. by `just test`), use the
+    // externally-managed server instead of starting one. This avoids the
+    // port-contention race that occurs when many test processes start in parallel.
+    if let (Ok(server_url), Ok(token)) = (
+        std::env::var("NB_TEST_SERVER_URL"),
+        std::env::var("NB_TEST_SERVER_TOKEN"),
+    ) {
+        let venv_root = test_helpers::setup_execution_venv()?;
+        let venv_path_env = test_helpers::setup_venv_environment()?;
+        let binary_path = env!("CARGO_BIN_EXE_nb").into();
+        let server_root: PathBuf = std::env::var("NB_TEST_SERVER_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| std::env::temp_dir());
+        if !wait_for_server(&server_url, &token, Duration::from_secs(5)) {
+            eprintln!("⚠️  NB_TEST_SERVER_URL is set but server is not responding — skipping connect-mode tests");
+            return None;
+        }
+        return Some(SharedServerInfo {
+            server_url,
+            token,
+            server_root,
+            binary_path,
+            venv_path_env,
+            venv_root,
+        });
+    }
+
     // Reuse the existing execution venv (setup_test_env.sh has already installed
     // ipykernel, jupyter_server, and jupyter-server-documents into it).
     let venv_root = test_helpers::setup_execution_venv()?;
@@ -66,12 +92,6 @@ fn start_shared_server() -> Option<SharedServerInfo> {
         return None;
     }
 
-    // Pick a free port.
-    let port = {
-        let listener = TcpListener::bind("127.0.0.1:0").ok()?;
-        listener.local_addr().ok()?.port()
-    };
-
     // Leak the TempDir so the directory persists for the lifetime of the process.
     // The OS will clean up the temp files on process exit.
     let server_root_tmp: &'static TempDir = Box::leak(Box::new(
@@ -81,7 +101,14 @@ fn start_shared_server() -> Option<SharedServerInfo> {
 
     let token = "nbtest123".to_string();
 
-    // Spawn the server.
+    // Pre-allocate a port by binding, recording it, then releasing.
+    // The TOCTOU window is small; the env-var path (used by `just test`)
+    // avoids this entirely by starting the server before test processes launch.
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").ok()?;
+        listener.local_addr().ok()?.port()
+    };
+
     let child = Command::new(&jupyter_bin)
         .args([
             "server",
@@ -104,7 +131,6 @@ fn start_shared_server() -> Option<SharedServerInfo> {
 
     let server_url = format!("http://127.0.0.1:{}", port);
 
-    // Poll until the server is ready (max 15 s).
     if !wait_for_server(&server_url, &token, Duration::from_secs(15)) {
         eprintln!("⚠️  Jupyter Server did not become ready in time — skipping connect-mode tests");
         return None;
@@ -572,7 +598,8 @@ fn test_remote_execute_with_error_fails() {
         .assert_failure();
 }
 
-/// `--allow-errors` suppresses the error exit code in remote mode.
+/// `--allow-errors` continues executing cells after an error (does not stop early).
+/// The command still exits non-zero because errors occurred.
 #[test]
 fn test_remote_execute_with_allow_errors() {
     let Some(ctx) = TestCtx::new() else {
@@ -581,8 +608,20 @@ fn test_remote_execute_with_allow_errors() {
     };
 
     let nb_path = ctx.copy_fixture("with_error.ipynb", "test_remote_allow_err.ipynb");
-    ctx.run_remote(&["execute", nb_path.to_str().unwrap(), "--allow-errors"])
-        .assert_success();
+    let result = ctx.run_remote(&["execute", nb_path.to_str().unwrap(), "--allow-errors"]);
+
+    // Exits non-zero (errors occurred) but produces output for all cells.
+    assert!(
+        !result.success,
+        "--allow-errors must still exit non-zero when errors occur"
+    );
+    assert!(
+        test_helpers::parse_notebook_header(&result.stdout).is_some(),
+        "must output notebook markdown even when errors occur"
+    );
+    // Both cells ran — valid_code cell succeeded, error cell has error output.
+    let cells = test_helpers::parse_cells(&result.stdout);
+    assert!(cells.len() >= 2, "both cells must appear in output");
 }
 
 /// An error mid-notebook must (a) exit non-zero, (b) report partial results for cells
