@@ -458,35 +458,6 @@ fn test_execute_last_cell_with_negative_index() {
 }
 
 #[test]
-#[ignore] // Dry-run feature not available in unified execute command
-fn test_execute_dry_run() {
-    let Some(env) = TestEnv::new() else {
-        eprintln!("⚠️  Skipping test: execution environment not available");
-        return;
-    };
-
-    let nb_path = env.copy_fixture("for_execution.ipynb", "test.ipynb");
-
-    // Execute with --dry-run
-    env.run(&[
-        "execute",
-        nb_path.to_str().unwrap(),
-        "--cell-index",
-        "0",
-        "--dry-run",
-    ])
-    .assert_success();
-
-    // Verify notebook wasn't modified (no execution count)
-    let result = env
-        .run(&["read", nb_path.to_str().unwrap()])
-        .assert_success();
-
-    // Execution count should still be null for dry run
-    assert!(result.stdout.contains("\"execution_count\": null"));
-}
-
-#[test]
 fn test_execute_json_format() {
     let Some(env) = TestEnv::new() else {
         eprintln!("⚠️  Skipping test: execution environment not available");

@@ -305,7 +305,7 @@ fn test_read_with_outputs() {
 
     let json = result.json_value();
     let cells = json["cells"].as_array().unwrap();
-    assert!(cells[0]["outputs"].as_array().unwrap().len() > 0);
+    assert!(!cells[0]["outputs"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -1547,7 +1547,7 @@ fn test_search_finds_pattern() {
         .assert_success();
 
     let json = result.json_value();
-    assert!(json["results"].as_array().unwrap().len() > 0);
+    assert!(!json["results"].as_array().unwrap().is_empty());
     assert!(json["total_matches"].as_u64().unwrap() > 0);
 }
 
@@ -1567,7 +1567,7 @@ fn test_search_case_insensitive() {
         .assert_success();
 
     let json = result.json_value();
-    assert!(json["results"].as_array().unwrap().len() > 0);
+    assert!(!json["results"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -1600,7 +1600,7 @@ fn test_search_multiple_matches() {
         .assert_success();
 
     let json = result.json_value();
-    assert!(json["results"].as_array().unwrap().len() > 0);
+    assert!(!json["results"].as_array().unwrap().is_empty());
     assert_eq!(json["total_matches"], 2);
 }
 

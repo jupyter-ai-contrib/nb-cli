@@ -50,8 +50,6 @@ test:
             --ServerApp.root_dir="$SERVER_ROOT" \
             --port="$PORT" \
             --ServerApp.open_browser=False \
-            --MappingKernelManager.cull_idle_timeout=10 \
-            --MappingKernelManager.cull_interval=5 \
             > /dev/null 2>&1 &
     SERVER_PID=$!
     trap "kill $SERVER_PID 2>/dev/null; rm -rf '$SERVER_ROOT' 2>/dev/null || true" EXIT
