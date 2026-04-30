@@ -2,6 +2,7 @@
 name = "nb-cli"
 version = "0.0.8"
 edition = "2021"
+rust-version = "1.75"
 description = "A command-line tool for reading, writing, and executing Jupyter notebooks"
 authors = ["Project Jupyter <jupyter@googlegroups.com>"]
 license = "BSD-3-Clause"
@@ -55,3 +56,6 @@ ratatui = "0.28"
 crossterm = "0.28"
 syntect = "5.2"
 notify = "6.1"
+
+[dev-dependencies]
+proptest = "1"

@@ -290,7 +290,7 @@ pub fn notebook_path_for_server(file_path: &str, server_root: Option<&str>) -> S
 
     abs.strip_prefix(&root_canon)
         .ok()
-        .and_then(|rel| rel.to_str().map(String::from))
+        .and_then(|rel| rel.to_str().map(|s| s.replace('\\', "/")))
         .unwrap_or_else(|| file_path.to_string())
 }
 
@@ -333,5 +333,88 @@ mod tests {
         assert_eq!(super::unescape_string("quote\\'here"), "quote'here");
         assert_eq!(super::unescape_string("no escapes"), "no escapes");
         assert_eq!(super::unescape_string("\\n\\t\\r"), "\n\t\r");
+    }
+
+    #[test]
+    fn test_resolve_execution_mode_flag_error_cases() {
+        use crate::execution::types::ExecutionMode;
+
+        // server without token → error mentioning --token
+        let err = resolve_execution_mode(Some("http://host:8888".to_string()), None).unwrap_err();
+        assert!(
+            err.to_string().contains("--token"),
+            "error must mention --token: {err}"
+        );
+
+        // token without server → error mentioning --server
+        let err = resolve_execution_mode(None, Some("tok".to_string())).unwrap_err();
+        assert!(
+            err.to_string().contains("--server"),
+            "error must mention --server: {err}"
+        );
+
+        // both provided → Remote mode, no config load needed
+        let mode = resolve_execution_mode(
+            Some("http://host:8888".to_string()),
+            Some("tok".to_string()),
+        )
+        .unwrap();
+        assert!(matches!(mode, ExecutionMode::Remote { .. }));
+    }
+
+    #[test]
+    fn test_is_binary_mime_type_svg_exception() {
+        // SVG is rendered as text despite the image/ prefix — document this quirk
+        assert!(
+            !is_binary_mime_type("image/svg+xml"),
+            "SVG must not be binary"
+        );
+        assert!(is_binary_mime_type("image/png"), "PNG must be binary");
+        assert!(is_binary_mime_type("image/jpeg"), "JPEG must be binary");
+        assert!(is_binary_mime_type("application/pdf"), "PDF must be binary");
+        assert!(!is_binary_mime_type("text/html"), "HTML must not be binary");
+    }
+
+    #[test]
+    fn test_normalize_notebook_path_no_double_extension() {
+        assert_eq!(normalize_notebook_path("my_nb.ipynb"), "my_nb.ipynb");
+        assert_eq!(normalize_notebook_path("my_nb"), "my_nb.ipynb");
+        assert_eq!(
+            normalize_notebook_path("path/to/notebook"),
+            "path/to/notebook.ipynb"
+        );
+        assert_eq!(
+            normalize_notebook_path("path/to/notebook.ipynb"),
+            "path/to/notebook.ipynb"
+        );
+    }
+
+    #[test]
+    fn test_notebook_path_for_server_strips_root() {
+        let root = tempfile::TempDir::new().unwrap();
+        let sub_dir = root.path().join("sub");
+        std::fs::create_dir(&sub_dir).unwrap();
+        let nb_path = sub_dir.join("nb.ipynb");
+        std::fs::write(&nb_path, b"").unwrap();
+
+        let result = notebook_path_for_server(
+            nb_path.to_str().unwrap(),
+            Some(root.path().to_str().unwrap()),
+        );
+        assert_eq!(result, "sub/nb.ipynb");
+    }
+
+    #[test]
+    fn test_notebook_path_for_server_fallbacks() {
+        // No server root → input returned unchanged
+        assert_eq!(
+            notebook_path_for_server("mynotebook.ipynb", None),
+            "mynotebook.ipynb"
+        );
+        // Non-existent file → canonicalize fails → input returned unchanged
+        assert_eq!(
+            notebook_path_for_server("/nonexistent/path/nb.ipynb", Some("/tmp")),
+            "/nonexistent/path/nb.ipynb"
+        );
     }
 }

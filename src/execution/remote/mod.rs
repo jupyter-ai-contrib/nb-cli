@@ -192,6 +192,7 @@ impl ExecutionBackend for RemoteExecutor {
         let mut idle_received = false;
         let mut expected_ec: Option<i64> = None;
         let deadline = tokio::time::Instant::now() + self.config.timeout;
+        let mut idle_catchup_deadline: Option<tokio::time::Instant> = None;
 
         loop {
             // 3. Check ydoc state before blocking — the update may already
@@ -251,7 +252,12 @@ impl ExecutionBackend for RemoteExecutor {
 
             // 4. Wait for new messages
             if idle_received {
-                match tokio::time::timeout_at(deadline, ydoc.recv_update()).await {
+                // Kernel is done. Give Y.js a fixed 5s window (from first idle) to deliver outputs.
+                // Output cells: Y.js delivers in <1s. No-output cells: times out, returns with kernel's ec.
+                let catchup = *idle_catchup_deadline.get_or_insert_with(|| {
+                    (tokio::time::Instant::now() + std::time::Duration::from_secs(5)).min(deadline)
+                });
+                match tokio::time::timeout_at(catchup, ydoc.recv_update()).await {
                     Ok(Ok(_)) => {}
                     Ok(Err(e)) => return Err(e).context("Y.js update error"),
                     Err(_) => break,
@@ -281,6 +287,7 @@ impl ExecutionBackend for RemoteExecutor {
                     ydoc_result = ydoc.recv_update() => {
                         ydoc_result.context("Y.js update error")?;
                     }
+                    _ = tokio::time::sleep_until(deadline) => { break; }
                 }
             }
         }
@@ -288,7 +295,8 @@ impl ExecutionBackend for RemoteExecutor {
         let ec = ydoc
             .read_cell_outputs(cell_idx)
             .ok()
-            .and_then(|c| c.execution_count);
+            .and_then(|c| c.execution_count)
+            .or(expected_ec);
         Ok(ExecutionResult::success(outputs, ec))
     }
 

@@ -4,6 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
+use test_helpers::CommandResult;
 
 /// Helper struct to manage test environment
 struct TestEnv {
@@ -70,38 +71,6 @@ impl TestEnv {
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
             success: output.status.success(),
         }
-    }
-}
-
-struct CommandResult {
-    stdout: String,
-    stderr: String,
-    success: bool,
-}
-
-impl CommandResult {
-    fn assert_success(self) -> Self {
-        if !self.success {
-            panic!(
-                "Command failed:\nStderr: {}\nStdout: {}",
-                self.stderr, self.stdout
-            );
-        }
-        self
-    }
-
-    fn assert_failure(self) -> Self {
-        if self.success {
-            panic!(
-                "Expected command to fail but it succeeded:\nStdout: {}\nStderr: {}",
-                self.stdout, self.stderr
-            );
-        }
-        self
-    }
-
-    fn json_value(&self) -> serde_json::Value {
-        serde_json::from_str(&self.stdout).expect("Failed to parse JSON output")
     }
 }
 
@@ -336,7 +305,7 @@ fn test_read_with_outputs() {
 
     let json = result.json_value();
     let cells = json["cells"].as_array().unwrap();
-    assert!(cells[0]["outputs"].as_array().unwrap().len() > 0);
+    assert!(!cells[0]["outputs"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -1578,7 +1547,7 @@ fn test_search_finds_pattern() {
         .assert_success();
 
     let json = result.json_value();
-    assert!(json["results"].as_array().unwrap().len() > 0);
+    assert!(!json["results"].as_array().unwrap().is_empty());
     assert!(json["total_matches"].as_u64().unwrap() > 0);
 }
 
@@ -1598,7 +1567,7 @@ fn test_search_case_insensitive() {
         .assert_success();
 
     let json = result.json_value();
-    assert!(json["results"].as_array().unwrap().len() > 0);
+    assert!(!json["results"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -1631,7 +1600,7 @@ fn test_search_multiple_matches() {
         .assert_success();
 
     let json = result.json_value();
-    assert!(json["results"].as_array().unwrap().len() > 0);
+    assert!(!json["results"].as_array().unwrap().is_empty());
     assert_eq!(json["total_matches"], 2);
 }
 

@@ -101,7 +101,7 @@ fn parse_multi_cell_source(text: &str) -> Option<Vec<ParsedCell>> {
     // sentinel. This prevents accidental data loss when cell content happens
     // to contain @@code/@@markdown/@@raw as literal text.
     let first_non_empty = lines.iter().find(|line| !line.trim().is_empty());
-    if first_non_empty.is_none_or(|line| parse_sentinel(line).is_none()) {
+    if first_non_empty.map_or(true, |line| parse_sentinel(line).is_none()) {
         return None;
     }
 

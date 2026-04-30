@@ -32,13 +32,9 @@ else
     echo "✅ Test venv already exists"
 fi
 
-# Install ipykernel for Python kernel
-echo "📦 Installing ipykernel..."
-uv pip install --python "$VENV_PATH" ipykernel
-
-# Install jupyter_server and jupyter-server-documents for connect-mode tests
-echo "📦 Installing jupyter_server and jupyter-server-documents..."
-uv pip install --python "$VENV_PATH" jupyter_server jupyter-server-documents
+# Install pinned test dependencies
+echo "📦 Installing test dependencies from requirements.txt..."
+uv pip install --python "$VENV_PATH" -r "$SCRIPT_DIR/requirements.txt"
 
 echo ""
 echo "✅ Test environment ready!"
@@ -46,9 +42,9 @@ echo ""
 echo "To run execution tests:"
 echo "  cargo test --test integration_execution"
 echo ""
-echo "To run connect-mode tests (must be single-threaded):"
-echo "  cargo test --test integration_connect_mode -- --test-threads=1"
+echo "To run connect-mode tests:"
+echo "  cargo nextest run --test integration_connect_mode"
 echo ""
 echo "To run all tests:"
-echo "  cargo test"
+echo "  cargo nextest run"
 echo ""

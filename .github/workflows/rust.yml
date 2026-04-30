@@ -27,6 +27,7 @@ jobs:
   test:
 
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
     - uses: actions/checkout@v4
@@ -58,9 +59,14 @@ jobs:
       uses: actions/cache@v4
       with:
         path: tests/.test-venv
-        key: ${{ runner.os }}-test-venv-${{ hashFiles('requirements.txt') }}
+        key: ${{ runner.os }}-test-venv-${{ hashFiles('tests/requirements.txt') }}
         restore-keys: |
           ${{ runner.os }}-test-venv-
+
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-nextest
 
     - name: Setup test environment
       run: ./tests/setup_test_env.sh
@@ -68,28 +74,25 @@ jobs:
     - name: Build
       run: cargo build --verbose
 
-    - name: Run tests
-      run: |
-        echo "Running all tests..."
-        cargo test --test integration_local_mode --verbose
-        cargo test --test integration_execution --verbose
-        cargo test --bins --verbose
-        echo "✅ All tests passed!"
+    - name: Run all tests
+      # nextest: covers all test binaries in one command.
+      # Serial execution for integration_connect_mode is declared in .config/nextest.toml
+      # (test-groups.live-server), replacing the old -- --test-threads=1 CLI flag.
+      # fail-fast=true (nextest default): first failure stops the run, so the
+      # aaa_server_must_be_available sentinel correctly gates all connect-mode tests.
+      run: cargo nextest run --profile ci
 
-    # Connect-mode tests require a running Jupyter server and are not run in CI by default.
-    # To enable, set RUN_CONNECT_TESTS=true in the workflow environment and ensure
-    # jupyter_server + jupyter-server-documents are installed in the test venv.
-    # Note: must use --test-threads=1 to avoid races on the shared Jupyter server.
-    #
-    # - name: Run connect-mode tests
-    #   if: env.RUN_CONNECT_TESTS == 'true'
-    #   run: cargo test --test integration_connect_mode -- --test-threads=1
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: junit-results
+        path: target/nextest/ci/junit.xml
 
   test-windows:
     name: Test (Windows)
     runs-on: windows-latest
-    permissions:
-      contents: write
+    timeout-minutes: 15
 
     steps:
     - uses: actions/checkout@v4
@@ -107,21 +110,13 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-cargo-
 
-    - name: Install Rust target
-      run: rustup target add x86_64-pc-windows-msvc
-
-    - name: Build release binary
-      run: cargo build --release --target x86_64-pc-windows-msvc
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-nextest
 
     - name: Run unit tests (kernel discovery)
       # Integration tests require a Unix shell setup script; run unit tests only.
       # This verifies Windows-specific #[cfg(target_os = "windows")] code paths compile
       # and that kernel directory logic is correct on Windows.
-      run: cargo test --bins --verbose
-
-    - name: Upload Windows binary
-      uses: actions/upload-artifact@v4
-      with:
-        name: nb-windows-amd64
-        path: target/x86_64-pc-windows-msvc/release/nb.exe
-        retention-days: 30
+      run: cargo nextest run --bins --profile ci

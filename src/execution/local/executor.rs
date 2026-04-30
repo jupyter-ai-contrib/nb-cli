@@ -286,9 +286,16 @@ impl ExecutionBackend for LocalExecutor {
             .unwrap_or(EnvManager::Direct);
 
         let mut cmd = match env_manager {
-            EnvManager::Direct => kernel_spec
-                .command(&connection_path, None, None)
-                .context("Failed to create kernel command")?,
+            EnvManager::Direct => {
+                let env = kernel_spec.kernelspec.env.clone();
+                let mut cmd = kernel_spec
+                    .command(&connection_path, None, None)
+                    .context("Failed to create kernel command")?;
+                if let Some(env) = env {
+                    cmd.envs(env);
+                }
+                cmd
+            }
             EnvManager::Uv | EnvManager::Pixi => {
                 let argv = &kernel_spec.kernelspec.argv;
                 if argv.is_empty() {

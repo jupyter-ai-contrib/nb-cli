@@ -1,0 +1,3 @@
+ipykernel==7.2.0
+jupyter_server==2.17.0
+jupyter-server-documents==0.2.0

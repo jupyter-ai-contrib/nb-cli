@@ -60,7 +60,7 @@ impl JupyterClient {
 
     /// Test connection to the server
     pub async fn test_connection(&self) -> Result<()> {
-        let url = format!("{}/api", self.base_url);
+        let url = format!("{}/api/contents", self.base_url);
         let response = self
             .client
             .get(&url)
@@ -357,4 +357,56 @@ fn filename_from_path(notebook_path: &str) -> String {
         .and_then(|name| name.to_str())
         .unwrap_or(notebook_path)
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn client(base_url: &str) -> JupyterClient {
+        JupyterClient::new(base_url.to_string(), "tok".to_string()).unwrap()
+    }
+
+    #[test]
+    fn test_get_ws_url_formats() {
+        let c = client("http://127.0.0.1:8888");
+
+        let url = c.get_ws_url("kid1", None);
+        assert_eq!(
+            url,
+            "ws://127.0.0.1:8888/api/kernels/kid1/channels?token=tok"
+        );
+
+        let url = c.get_ws_url("kid2", Some("sid42"));
+        assert_eq!(
+            url,
+            "ws://127.0.0.1:8888/api/kernels/kid2/channels?session_id=sid42&token=tok"
+        );
+
+        let c_https = client("https://example.com");
+        let url = c_https.get_ws_url("kid3", None);
+        assert!(url.starts_with("wss://"), "https must become wss");
+    }
+
+    #[test]
+    fn test_new_trims_trailing_slash() {
+        let c = client("http://host:8888/");
+        let url = c.get_ws_url("k", None);
+        assert!(
+            !url.contains("//api"),
+            "trailing slash must not produce double-slash in URL: {url}"
+        );
+        assert!(url.contains("/api/kernels/k/channels"));
+    }
+
+    #[test]
+    fn test_filename_from_path_extracts_name() {
+        assert_eq!(
+            filename_from_path("path/to/notebook.ipynb"),
+            "notebook.ipynb"
+        );
+        assert_eq!(filename_from_path("notebook.ipynb"), "notebook.ipynb");
+        // Empty string: Path::new("").file_name() returns None → falls back to input unchanged
+        assert_eq!(filename_from_path(""), "");
+    }
 }

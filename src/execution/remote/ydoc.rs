@@ -465,60 +465,67 @@ impl YDocClient {
     /// Read outputs and execution_count for a cell from the Y.js document.
     /// If outputs are externalized (metadata.url present), fetches actual content from the server.
     pub fn read_cell_outputs(&self, cell_index: usize) -> Result<YDocCellOutputs> {
-        let cells_array: ArrayRef = self.doc.get_or_insert_array("cells");
-        let txn = self.doc.transact();
+        read_cell_outputs_from_doc(&self.doc, cell_index)
+    }
+}
 
-        let cell_value = cells_array
-            .get(&txn, cell_index as u32)
-            .context("Cell index out of bounds in Y.js doc")?;
-        let cell_map: yrs::MapRef = cell_value
-            .cast()
-            .map_err(|_| anyhow::anyhow!("Cell is not a Map"))?;
+/// Read cell outputs and execution_count from a Y.js Doc directly.
+/// Extracted for testability — `YDocClient::read_cell_outputs` delegates here.
+pub(crate) fn read_cell_outputs_from_doc(doc: &Doc, cell_index: usize) -> Result<YDocCellOutputs> {
+    let cells_array: ArrayRef = doc.get_or_insert_array("cells");
+    let txn = doc.transact();
 
-        // Read execution_count
-        let execution_count =
-            cell_map
-                .get(&txn, "execution_count")
-                .and_then(|v| match v.to_json(&txn) {
-                    yrs::Any::BigInt(n) => Some(n),
-                    yrs::Any::Number(n) => Some(n as i64),
-                    _ => None,
-                });
+    let cell_value = cells_array
+        .get(&txn, cell_index as u32)
+        .context("Cell index out of bounds in Y.js doc")?;
+    let cell_map: yrs::MapRef = cell_value
+        .cast()
+        .map_err(|_| anyhow::anyhow!("Cell is not a Map"))?;
 
-        // Read outputs array — collect externalized (have metadata.url) and inline outputs
-        let mut urls: Vec<(usize, String)> = Vec::new();
-        let mut inline: Vec<(usize, nbformat::v4::Output)> = Vec::new();
+    // Read execution_count
+    let execution_count =
+        cell_map
+            .get(&txn, "execution_count")
+            .and_then(|v| match v.to_json(&txn) {
+                yrs::Any::BigInt(n) => Some(n),
+                yrs::Any::Number(n) => Some(n as i64),
+                _ => None,
+            });
 
-        if let Some(outputs_val) = cell_map.get(&txn, "outputs") {
-            if let Ok(arr) = outputs_val.cast::<ArrayRef>() {
-                let len = arr.len(&txn);
-                for i in 0..len {
-                    if let Some(item) = arr.get(&txn, i) {
-                        let json_val = item.to_json(&txn);
-                        let json = any_to_json(&json_val);
-                        if let Some(url) = json
-                            .get("metadata")
-                            .and_then(|m| m.get("url"))
-                            .and_then(|u| u.as_str())
-                        {
-                            urls.push((i as usize, url.to_string()));
-                        } else if let Ok(output) =
-                            serde_json::from_value::<nbformat::v4::Output>(json)
-                        {
-                            inline.push((i as usize, output));
-                        }
+    // Read outputs array — collect externalized (have metadata.url) and inline outputs
+    let mut urls: Vec<(usize, String)> = Vec::new();
+    let mut inline: Vec<(usize, nbformat::v4::Output)> = Vec::new();
+
+    if let Some(outputs_val) = cell_map.get(&txn, "outputs") {
+        if let Ok(arr) = outputs_val.cast::<ArrayRef>() {
+            let len = arr.len(&txn);
+            for i in 0..len {
+                if let Some(item) = arr.get(&txn, i) {
+                    let json_val = item.to_json(&txn);
+                    let json = any_to_json(&json_val);
+                    if let Some(url) = json
+                        .get("metadata")
+                        .and_then(|m| m.get("url"))
+                        .and_then(|u| u.as_str())
+                    {
+                        urls.push((i as usize, url.to_string()));
+                    } else if let Ok(output) = serde_json::from_value::<nbformat::v4::Output>(json)
+                    {
+                        inline.push((i as usize, output));
                     }
                 }
             }
         }
-
-        Ok(YDocCellOutputs {
-            execution_count,
-            externalized_urls: urls,
-            inline_outputs: inline,
-        })
     }
 
+    Ok(YDocCellOutputs {
+        execution_count,
+        externalized_urls: urls,
+        inline_outputs: inline,
+    })
+}
+
+impl YDocClient {
     /// Close the WebSocket connection
     pub async fn close(mut self) -> Result<()> {
         self.ws
@@ -526,5 +533,120 @@ impl YDocClient {
             .await
             .context("Failed to close WebSocket")?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_build_room_ws_url_port_and_scheme() {
+        let url = YDocClient::build_room_ws_url("http://127.0.0.1:8888", "abc", "tok").unwrap();
+        assert!(
+            url.starts_with("ws://127.0.0.1:8888/"),
+            "http must become ws: {url}"
+        );
+        assert!(url.contains("json:notebook:abc"), "file_id must be in path");
+        assert!(url.ends_with("token=tok"));
+
+        let url = YDocClient::build_room_ws_url("http://127.0.0.1:9999", "xyz", "t").unwrap();
+        assert!(
+            url.starts_with("ws://127.0.0.1:9999/"),
+            "port 9999 must be preserved: {url}"
+        );
+
+        let url = YDocClient::build_room_ws_url("https://example.com", "id1", "tk").unwrap();
+        assert!(
+            url.starts_with("wss://example.com:443/"),
+            "https must become wss with default port 443: {url}"
+        );
+    }
+
+    #[test]
+    fn test_any_to_json_type_coverage() {
+        assert_eq!(any_to_json(&yrs::Any::Null), serde_json::Value::Null);
+        assert_eq!(any_to_json(&yrs::Any::Undefined), serde_json::Value::Null);
+        assert_eq!(any_to_json(&yrs::Any::BigInt(5)), serde_json::json!(5i64));
+        assert_eq!(any_to_json(&yrs::Any::Bool(true)), serde_json::json!(true));
+
+        let mut map: HashMap<String, yrs::Any> = HashMap::new();
+        map.insert("key".to_string(), yrs::Any::String("val".into()));
+        let result = any_to_json(&yrs::Any::from(map));
+        assert_eq!(result["key"], serde_json::json!("val"));
+    }
+
+    // Helper: build a Doc with one cell and insert a raw output map via a MapPrelim.
+    fn doc_with_cell_output(output_map: yrs::MapPrelim) -> Doc {
+        use yrs::Transact;
+        let doc = Doc::new();
+        let cells = doc.get_or_insert_array("cells");
+        let mut txn = doc.transact_mut();
+        // Insert a code cell
+        cells.insert(&mut txn, 0, yrs::MapPrelim::from([("cell_type", "code")]));
+        // Get the cell's outputs array and insert the output
+        let cell_map = cells.get(&txn, 0).unwrap().cast::<yrs::MapRef>().unwrap();
+        let outputs_arr: yrs::ArrayRef =
+            cell_map.insert(&mut txn, "outputs", yrs::ArrayPrelim::default());
+        outputs_arr.insert(&mut txn, 0, output_map);
+        drop(txn);
+        doc
+    }
+
+    #[test]
+    fn test_read_cell_outputs_inline_classified_correctly() {
+        use super::read_cell_outputs_from_doc;
+        use yrs::MapPrelim;
+
+        // A stream output has no metadata.url — it must go into inline_outputs
+        let output_map = MapPrelim::from([
+            ("output_type", "stream"),
+            ("name", "stdout"),
+            ("text", "hello"),
+        ]);
+        let doc = doc_with_cell_output(output_map);
+
+        let result = read_cell_outputs_from_doc(&doc, 0).unwrap();
+        assert_eq!(
+            result.inline_outputs.len(),
+            1,
+            "should have 1 inline output"
+        );
+        assert!(
+            result.externalized_urls.is_empty(),
+            "should have no externalized URLs"
+        );
+    }
+
+    #[test]
+    fn test_read_cell_outputs_externalized_classified_correctly() {
+        use super::read_cell_outputs_from_doc;
+        use std::collections::HashMap;
+        use yrs::Any;
+
+        // An output with metadata.url must go into externalized_urls.
+        // Build the metadata map as yrs::Any::Map, then embed in the output MapPrelim.
+        let mut metadata_inner: HashMap<String, Any> = HashMap::new();
+        metadata_inner.insert("url".to_string(), Any::String("/api/outputs/abc123".into()));
+        let metadata_any = Any::from(metadata_inner);
+
+        let output_prelim = yrs::MapPrelim::from([
+            ("output_type", Any::String("display_data".into())),
+            ("metadata", metadata_any),
+        ]);
+        let doc = doc_with_cell_output(output_prelim);
+
+        let result = read_cell_outputs_from_doc(&doc, 0).unwrap();
+        assert!(
+            result.inline_outputs.is_empty(),
+            "should have no inline outputs"
+        );
+        assert_eq!(
+            result.externalized_urls.len(),
+            1,
+            "should have 1 externalized URL"
+        );
+        assert_eq!(result.externalized_urls[0].1, "/api/outputs/abc123");
     }
 }
