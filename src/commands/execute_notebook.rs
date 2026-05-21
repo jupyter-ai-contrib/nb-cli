@@ -122,7 +122,12 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     // Read notebook from the appropriate source
     let mut notebook = match &mode {
         ExecutionMode::Remote { server_url, token } => {
-            common::read_notebook_remote(server_url, token, server_path.as_deref().expect("set for Remote mode")).await?
+            common::read_notebook_remote(
+                server_url,
+                token,
+                server_path.as_deref().expect("set for Remote mode"),
+            )
+            .await?
         }
         ExecutionMode::Local => read_notebook(&file_path).context("Failed to read notebook")?,
     };
