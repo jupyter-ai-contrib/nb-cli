@@ -160,8 +160,8 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
             common::notebook_path_for_server(&file_path, server_root.as_deref())
         }
         ExecutionMode::Local => {
-            let abs = std::fs::canonicalize(&file_path)
-                .context("Failed to resolve notebook path")?;
+            let abs =
+                std::fs::canonicalize(&file_path).context("Failed to resolve notebook path")?;
             abs.to_str()
                 .context("Notebook path contains invalid UTF-8")?
                 .to_string()

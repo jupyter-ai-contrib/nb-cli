@@ -276,7 +276,9 @@ fn test_execute_without_restart_preserves_state() {
     ctx.copy_fixture("for_connect_restart.ipynb", "test_preserve.ipynb");
 
     // First: execute the full notebook to establish kernel state.
-    let result = ctx.run(&["execute", "test_preserve.ipynb"]).assert_success();
+    let result = ctx
+        .run(&["execute", "test_preserve.ipynb"])
+        .assert_success();
 
     assert!(
         result.stdout.contains("persistent_var = 999"),
@@ -370,7 +372,8 @@ fn test_restart_kernel_then_full_notebook_works() {
     ctx.copy_fixture("for_connect_restart.ipynb", "test_restart_full.ipynb");
 
     // Step 1: initial full execution to create the session.
-    ctx.run(&["execute", "test_restart_full.ipynb"]).assert_success();
+    ctx.run(&["execute", "test_restart_full.ipynb"])
+        .assert_success();
 
     // Step 2: full re-execution with --restart-kernel.
     // All cells are run in order from scratch, so cell-set runs before cell-use.

@@ -309,7 +309,11 @@ impl JupyterClient {
         let response = self
             .client
             .get(&url)
-            .query(&[("token", &self.token), ("content", &"1".to_string()), ("type", &"notebook".to_string())])
+            .query(&[
+                ("token", &self.token),
+                ("content", &"1".to_string()),
+                ("type", &"notebook".to_string()),
+            ])
             .send()
             .await
             .context("Failed to fetch notebook from server")?;
