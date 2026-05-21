@@ -201,6 +201,7 @@ mod tests {
         assert_eq!(conn.token, "abc123");
         assert_eq!(conn.working_dir, Some("/home/user".to_string()));
         assert_eq!(conn.env_manager, Some("uv".to_string()));
+        assert_eq!(conn.project_root, Some("/projects/myproject".to_string()));
     }
 
     #[test]
