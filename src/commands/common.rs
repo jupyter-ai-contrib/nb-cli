@@ -457,6 +457,20 @@ mod tests {
     }
 
     #[test]
+    fn test_normalize_notebook_path_no_double_extension() {
+        assert_eq!(normalize_notebook_path("my_nb.ipynb"), "my_nb.ipynb");
+        assert_eq!(normalize_notebook_path("my_nb"), "my_nb.ipynb");
+        assert_eq!(
+            normalize_notebook_path("path/to/notebook"),
+            "path/to/notebook.ipynb"
+        );
+        assert_eq!(
+            normalize_notebook_path("path/to/notebook.ipynb"),
+            "path/to/notebook.ipynb"
+        );
+    }
+
+    #[test]
     fn test_notebook_path_for_server_fallbacks() {
         // No server root → input returned unchanged
         assert_eq!(

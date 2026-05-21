@@ -1,5 +1,6 @@
 mod test_helpers;
 
+use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
