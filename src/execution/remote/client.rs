@@ -347,15 +347,11 @@ impl JupyterClient {
 
         let content = body
             .get("content")
+            .cloned()
             .context("Contents API response missing 'content' field")?;
 
-        let nb = nbformat::parse_notebook(&content.to_string())
-            .context("Failed to parse notebook from server")?;
-
-        match nb {
-            nbformat::Notebook::V4(notebook) => Ok(notebook),
-            _ => anyhow::bail!("Only nbformat v4 notebooks are supported"),
-        }
+        serde_json::from_value::<nbformat::v4::Notebook>(content)
+            .context("Failed to parse notebook from server (expected nbformat v4)")
     }
 
     /// Save a notebook to the server
