@@ -107,10 +107,22 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     let mode =
         crate::commands::common::resolve_execution_mode(args.server.clone(), args.token.clone())?;
 
+    // For remote mode, compute the server-relative path once and reuse it
+    // for both the Contents API read and the session identifier.
+    let server_path = if matches!(mode, ExecutionMode::Remote { .. }) {
+        let server_root = common::resolve_server_root();
+        Some(common::notebook_path_for_server(
+            &file_path,
+            server_root.as_deref(),
+        ))
+    } else {
+        None
+    };
+
     // Read notebook from the appropriate source
     let mut notebook = match &mode {
         ExecutionMode::Remote { server_url, token } => {
-            common::read_notebook_remote(server_url, token, &file_path).await?
+            common::read_notebook_remote(server_url, token, server_path.as_deref().unwrap()).await?
         }
         ExecutionMode::Local => read_notebook(&file_path).context("Failed to read notebook")?,
     };
@@ -152,13 +164,10 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         .as_ref()
         .map(|ks| ks.name.as_str());
 
-    // For remote mode, compute path relative to server root for session identity.
+    // For remote mode, reuse the pre-computed server-relative path.
     // For local mode, use absolute path for working directory determination.
     let notebook_identifier = match &mode {
-        ExecutionMode::Remote { .. } => {
-            let server_root = common::resolve_server_root();
-            common::notebook_path_for_server(&file_path, server_root.as_deref())
-        }
+        ExecutionMode::Remote { .. } => server_path.clone().unwrap(),
         ExecutionMode::Local => {
             let abs =
                 std::fs::canonicalize(&file_path).context("Failed to resolve notebook path")?;

@@ -268,21 +268,22 @@ pub fn resolve_server_root() -> Option<String> {
 }
 
 /// Read a notebook from a Jupyter Server via the Contents API.
+///
+/// `server_path` must be the notebook path relative to the server root
+/// (as computed by `notebook_path_for_server`).
 pub async fn read_notebook_remote(
     server_url: &str,
     token: &str,
-    file_path: &str,
+    server_path: &str,
 ) -> Result<nbformat::v4::Notebook> {
-    let server_root = resolve_server_root();
-    let server_path = notebook_path_for_server(file_path, server_root.as_deref());
     let client = crate::execution::remote::client::JupyterClient::new(
         server_url.to_string(),
         token.to_string(),
     )?;
     client
-        .get_notebook(&server_path)
+        .get_notebook(server_path)
         .await
-        .with_context(|| format!("Failed to read notebook '{}' from server", file_path))
+        .with_context(|| format!("Failed to read notebook '{}' from server", server_path))
 }
 
 /// Compute a notebook path relative to the Jupyter server root.

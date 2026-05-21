@@ -81,8 +81,8 @@ async fn execute_with_realtime(
     let server_root = common::resolve_server_root();
     let notebook_server_path = common::notebook_path_for_server(&file_path, server_root.as_deref());
 
-    // Read notebook from server
-    let notebook = common::read_notebook_remote(&server_url, &token, &file_path).await?;
+    // Read notebook from server (reuse the server-relative path)
+    let notebook = common::read_notebook_remote(&server_url, &token, &notebook_server_path).await?;
 
     // Collect indices to delete
     let mut indices_to_delete: HashSet<usize> = HashSet::new();
