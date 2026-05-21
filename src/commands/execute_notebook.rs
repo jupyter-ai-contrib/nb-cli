@@ -122,7 +122,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     // Read notebook from the appropriate source
     let mut notebook = match &mode {
         ExecutionMode::Remote { server_url, token } => {
-            common::read_notebook_remote(server_url, token, server_path.as_deref().unwrap()).await?
+            common::read_notebook_remote(server_url, token, server_path.as_deref().expect("set for Remote mode")).await?
         }
         ExecutionMode::Local => read_notebook(&file_path).context("Failed to read notebook")?,
     };
@@ -167,7 +167,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     // For remote mode, reuse the pre-computed server-relative path.
     // For local mode, use absolute path for working directory determination.
     let notebook_identifier = match &mode {
-        ExecutionMode::Remote { .. } => server_path.clone().unwrap(),
+        ExecutionMode::Remote { .. } => server_path.unwrap(),
         ExecutionMode::Local => {
             let abs =
                 std::fs::canonicalize(&file_path).context("Failed to resolve notebook path")?;

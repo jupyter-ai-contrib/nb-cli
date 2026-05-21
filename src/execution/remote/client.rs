@@ -372,7 +372,7 @@ impl JupyterClient {
         let response = self
             .client
             .put(&url)
-            .query(&[("token", &self.token)])
+            .query(&[("token", self.token.as_str())])
             .json(&payload)
             .send()
             .await
