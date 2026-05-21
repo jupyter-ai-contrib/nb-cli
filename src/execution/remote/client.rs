@@ -302,6 +302,42 @@ impl JupyterClient {
         Ok(())
     }
 
+    /// Read a notebook from the server via the Contents API.
+    pub async fn get_notebook(&self, path: &str) -> Result<nbformat::v4::Notebook> {
+        let url = format!("{}/api/contents/{}", self.base_url, path);
+
+        let response = self
+            .client
+            .get(&url)
+            .query(&[("token", &self.token), ("content", &"1".to_string()), ("type", &"notebook".to_string())])
+            .send()
+            .await
+            .context("Failed to fetch notebook from server")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to fetch notebook: HTTP {} - {}", status, text);
+        }
+
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .context("Failed to parse Contents API response")?;
+
+        let content = body
+            .get("content")
+            .context("Contents API response missing 'content' field")?;
+
+        let nb = nbformat::parse_notebook(&content.to_string())
+            .context("Failed to parse notebook from server")?;
+
+        match nb {
+            nbformat::Notebook::V4(notebook) => Ok(notebook),
+            _ => anyhow::bail!("Only nbformat v4 notebooks are supported"),
+        }
+    }
+
     /// Save a notebook to the server
     #[allow(dead_code)]
     pub async fn save_notebook(&self, path: &str, notebook: &nbformat::v4::Notebook) -> Result<()> {

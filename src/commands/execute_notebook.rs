@@ -101,21 +101,28 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         None
     };
 
-    // Read notebook
     let file_path = common::normalize_notebook_path(&args.file);
-    let mut notebook = read_notebook(&file_path).context("Failed to read notebook")?;
+
+    // Determine execution mode before reading — remote mode reads from server
+    let mode =
+        crate::commands::common::resolve_execution_mode(args.server.clone(), args.token.clone())?;
+
+    // Read notebook from the appropriate source
+    let mut notebook = match &mode {
+        ExecutionMode::Remote { server_url, token } => {
+            common::read_notebook_remote(server_url, token, &file_path).await?
+        }
+        ExecutionMode::Local => read_notebook(&file_path).context("Failed to read notebook")?,
+    };
 
     // Determine cell range
     let (start_idx, end_idx) = if let Some(ref cell_id) = args.cell {
-        // Execute specific cell by ID
         let (idx, _) = crate::commands::common::find_cell_by_id(&notebook.cells, cell_id)?;
         (idx, idx)
     } else if let Some(cell_index) = args.cell_index {
-        // Execute specific cell by index
         let idx = crate::commands::common::normalize_index(cell_index, notebook.cells.len())?;
         (idx, idx)
     } else {
-        // Execute range or all cells
         let start = if let Some(start) = args.start {
             crate::commands::common::normalize_index(start, notebook.cells.len())?
         } else {
@@ -139,35 +146,27 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         );
     }
 
-    // Determine execution mode
-    let mode =
-        crate::commands::common::resolve_execution_mode(args.server.clone(), args.token.clone())?;
-
-    // Get kernel from notebook metadata if not specified
     let notebook_kernel = notebook
         .metadata
         .kernelspec
         .as_ref()
         .map(|ks| ks.name.as_str());
 
-    // Get absolute path to notebook for working directory determination
-    let notebook_path_abs =
-        std::fs::canonicalize(&file_path).context("Failed to resolve notebook path")?;
-    let notebook_path_str = notebook_path_abs
-        .to_str()
-        .context("Notebook path contains invalid UTF-8")?
-        .to_string();
-
-    // For remote mode, compute path relative to server root so that
-    // notebooks with the same name in different directories get distinct sessions.
-    let notebook_identifier =
-        if matches!(mode, crate::execution::types::ExecutionMode::Remote { .. }) {
+    // For remote mode, compute path relative to server root for session identity.
+    // For local mode, use absolute path for working directory determination.
+    let notebook_identifier = match &mode {
+        ExecutionMode::Remote { .. } => {
             let server_root = common::resolve_server_root();
             common::notebook_path_for_server(&file_path, server_root.as_deref())
-        } else {
-            // For local mode, use full absolute path
-            notebook_path_str.clone()
-        };
+        }
+        ExecutionMode::Local => {
+            let abs = std::fs::canonicalize(&file_path)
+                .context("Failed to resolve notebook path")?;
+            abs.to_str()
+                .context("Notebook path contains invalid UTF-8")?
+                .to_string()
+        }
+    };
 
     // Create execution config
     let config = ExecutionConfig {

@@ -177,6 +177,11 @@ impl TestCtx {
 
     /// Run `nb` with arbitrary args, automatically appending `--server` and `--token`.
     fn run(&self, args: &[&str]) -> CommandResult {
+        self.run_from_dir(args, &self.info.server_root)
+    }
+
+    /// Run `nb` from a specific working directory.
+    fn run_from_dir(&self, args: &[&str], cwd: &std::path::Path) -> CommandResult {
         let output = Command::new(&self.info.binary_path)
             .args(args)
             .args([
@@ -185,7 +190,7 @@ impl TestCtx {
                 "--token",
                 &self.info.token,
             ])
-            .current_dir(&self.info.server_root)
+            .current_dir(cwd)
             .env("PATH", &self.info.venv_path_env)
             .env("VIRTUAL_ENV", &self.info.venv_root)
             .env_remove("PYTHONHOME")
@@ -268,11 +273,10 @@ fn test_execute_without_restart_preserves_state() {
         return;
     };
 
-    let nb_path = ctx.copy_fixture("for_connect_restart.ipynb", "test_preserve.ipynb");
-    let nb_str = nb_path.to_str().unwrap();
+    ctx.copy_fixture("for_connect_restart.ipynb", "test_preserve.ipynb");
 
     // First: execute the full notebook to establish kernel state.
-    let result = ctx.run(&["execute", nb_str]).assert_success();
+    let result = ctx.run(&["execute", "test_preserve.ipynb"]).assert_success();
 
     assert!(
         result.stdout.contains("persistent_var = 999"),
@@ -283,7 +287,7 @@ fn test_execute_without_restart_preserves_state() {
     // Second: execute only cell-use (index 1) — no restart.
     // The kernel should still have `persistent_var` in scope.
     let result = ctx
-        .run(&["execute", nb_str, "--cell-index", "1"])
+        .run(&["execute", "test_preserve.ipynb", "--cell-index", "1"])
         .assert_success();
 
     assert!(
@@ -307,11 +311,10 @@ fn test_restart_kernel_clears_state() {
     };
 
     // Use a unique notebook name so this test has its own independent session.
-    let nb_path = ctx.copy_fixture("for_connect_restart.ipynb", "test_restart.ipynb");
-    let nb_str = nb_path.to_str().unwrap();
+    ctx.copy_fixture("for_connect_restart.ipynb", "test_restart.ipynb");
 
     // Step 1: run the full notebook to create the session and set state.
-    let result = ctx.run(&["execute", nb_str]).assert_success();
+    let result = ctx.run(&["execute", "test_restart.ipynb"]).assert_success();
 
     assert!(
         result.stdout.contains("persistent_var = 999"),
@@ -321,7 +324,7 @@ fn test_restart_kernel_clears_state() {
 
     // Step 2: run cell-use without restart — variable should still be in scope.
     let result = ctx
-        .run(&["execute", nb_str, "--cell-index", "1"])
+        .run(&["execute", "test_restart.ipynb", "--cell-index", "1"])
         .assert_success();
 
     assert!(
@@ -335,7 +338,7 @@ fn test_restart_kernel_clears_state() {
     let result = ctx
         .run(&[
             "execute",
-            nb_str,
+            "test_restart.ipynb",
             "--cell-index",
             "1",
             "--restart-kernel",
@@ -364,21 +367,47 @@ fn test_restart_kernel_then_full_notebook_works() {
     };
 
     // Use a unique notebook name so this test has its own independent session.
-    let nb_path = ctx.copy_fixture("for_connect_restart.ipynb", "test_restart_full.ipynb");
-    let nb_str = nb_path.to_str().unwrap();
+    ctx.copy_fixture("for_connect_restart.ipynb", "test_restart_full.ipynb");
 
     // Step 1: initial full execution to create the session.
-    ctx.run(&["execute", nb_str]).assert_success();
+    ctx.run(&["execute", "test_restart_full.ipynb"]).assert_success();
 
     // Step 2: full re-execution with --restart-kernel.
     // All cells are run in order from scratch, so cell-set runs before cell-use.
     let result = ctx
-        .run(&["execute", nb_str, "--restart-kernel"])
+        .run(&["execute", "test_restart_full.ipynb", "--restart-kernel"])
         .assert_success();
 
     assert!(
         result.stdout.contains("persistent_var = 999"),
         "Full notebook execution after restart should print 'persistent_var = 999'\nStdout: {}",
+        result.stdout
+    );
+}
+
+/// Execute a notebook from a CWD that differs from the server root.
+///
+/// This is the most common agent workflow: the agent runs from a project
+/// directory while the Jupyter server is rooted elsewhere. The notebook
+/// is read from the server via the Contents API.
+#[test]
+fn test_execute_from_different_cwd() {
+    let Some(ctx) = TestCtx::new() else {
+        eprintln!("⚠️  Skipping connect-mode test: jupyter server not available");
+        return;
+    };
+
+    ctx.copy_fixture("for_connect_restart.ipynb", "test_cwd.ipynb");
+
+    // Run from a temporary directory that is NOT the server root.
+    let other_dir = TempDir::new().expect("Failed to create temp dir");
+    let result = ctx
+        .run_from_dir(&["execute", "test_cwd.ipynb"], other_dir.path())
+        .assert_success();
+
+    assert!(
+        result.stdout.contains("persistent_var = 999"),
+        "Execution from different CWD should read notebook from server and succeed\nStdout: {}",
         result.stdout
     );
 }
