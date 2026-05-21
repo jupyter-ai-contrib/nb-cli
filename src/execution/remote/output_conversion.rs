@@ -300,7 +300,11 @@ mod tests {
             .unwrap();
         let out_map = get_output_map(&outputs_arr, &txn, 0);
         match out_map.get(&txn, "traceback").unwrap() {
-            yrs::Out::Any(Any::Array(arr)) => assert_eq!(arr.len(), 2),
+            yrs::Out::Any(Any::Array(arr)) => {
+                assert_eq!(arr.len(), 2);
+                assert_eq!(arr[0], Any::String("line1".into()));
+                assert_eq!(arr[1], Any::String("line2".into()));
+            }
             other => panic!("traceback must be Any::Array of 2, got {:?}", other),
         }
     }

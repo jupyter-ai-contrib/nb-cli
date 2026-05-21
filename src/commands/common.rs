@@ -441,7 +441,13 @@ mod tests {
             Some("tok".to_string()),
         )
         .unwrap();
-        assert!(matches!(mode, ExecutionMode::Remote { .. }));
+        assert_eq!(
+            mode,
+            ExecutionMode::Remote {
+                server_url: "http://host:8888".to_string(),
+                token: "tok".to_string(),
+            }
+        );
     }
 
     #[test]

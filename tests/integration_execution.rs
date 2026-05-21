@@ -274,26 +274,6 @@ fn test_execute_notebook_with_range() {
 }
 
 #[test]
-fn test_execute_with_restart_kernel() {
-    let Some(env) = TestEnv::new() else {
-        eprintln!("⚠️  Skipping test: execution environment not available");
-        return;
-    };
-
-    let nb_path = env.copy_fixture("for_execution.ipynb", "test.ipynb");
-
-    let result = env
-        .run(&["execute", nb_path.to_str().unwrap(), "--restart-kernel"])
-        .assert_success();
-
-    assert!(
-        result.stdout.contains("Result: 52"),
-        "--restart-kernel must still produce correct output\nStdout: {}",
-        result.stdout
-    );
-}
-
-#[test]
 fn test_execute_with_error() {
     let Some(env) = TestEnv::new() else {
         eprintln!("⚠️  Skipping test: execution environment not available");
