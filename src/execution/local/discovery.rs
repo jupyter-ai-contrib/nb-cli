@@ -414,6 +414,7 @@ mod tests {
     fn test_get_kernel_dirs_virtual_env() {
         // When VIRTUAL_ENV is set, its kernels path should appear first.
         // Use a platform-neutral PathBuf comparison so path separators don't matter.
+        // NOTE: set_var is safe here because nextest runs each test in its own process.
         let venv = std::env::temp_dir().join("test-venv");
         std::env::set_var("VIRTUAL_ENV", &venv);
         let dirs = get_kernel_dirs();

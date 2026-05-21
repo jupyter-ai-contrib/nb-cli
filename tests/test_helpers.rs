@@ -1,15 +1,52 @@
-/// Helper module for test utilities
+#![allow(dead_code)]
 use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
+
+// ==================== COMMAND RESULT ====================
+
+pub struct CommandResult {
+    pub stdout: String,
+    pub stderr: String,
+    pub success: bool,
+}
+
+impl CommandResult {
+    pub fn assert_success(self) -> Self {
+        if !self.success {
+            panic!(
+                "Command failed:\nStderr: {}\nStdout: {}",
+                self.stderr, self.stdout
+            );
+        }
+        self
+    }
+
+    pub fn assert_failure(self) -> Self {
+        if self.success {
+            panic!(
+                "Expected command to fail but it succeeded:\nStdout: {}\nStderr: {}",
+                self.stdout, self.stderr
+            );
+        }
+        self
+    }
+
+    pub fn json_value(&self) -> serde_json::Value {
+        serde_json::from_str(&self.stdout).expect("Failed to parse JSON output")
+    }
+
+    pub fn contains(&self, text: &str) -> bool {
+        self.stdout.contains(text) || self.stderr.contains(text)
+    }
+}
 
 // ==================== AI-OPTIMIZED MARKDOWN PARSING ====================
 
 /// A parsed sentinel line from AI-Optimized Markdown output (@@notebook, @@cell, @@output)
 #[derive(Debug, Clone)]
 pub struct Sentinel {
-    /// Sentinel type: "notebook", "cell", or "output"
     pub kind: String,
     /// Parsed JSON metadata following the sentinel marker
     #[allow(dead_code)]
@@ -39,8 +76,7 @@ pub fn parse_sentinel(line: &str) -> Option<Sentinel> {
     let rest = &line[2..];
     let space_idx = rest.find(' ')?;
     let kind = rest[..space_idx].to_string();
-    let json_str = &rest[space_idx + 1..];
-    let metadata: Value = serde_json::from_str(json_str).ok()?;
+    let metadata: Value = serde_json::from_str(&rest[space_idx + 1..]).ok()?;
     Some(Sentinel { kind, metadata })
 }
 
@@ -68,15 +104,13 @@ pub fn parse_outputs(output: &str) -> Vec<Sentinel> {
 }
 
 /// Extract the @@notebook sentinel from output
-#[allow(dead_code)]
 pub fn parse_notebook_header(output: &str) -> Option<Sentinel> {
     parse_sentinels(output)
         .into_iter()
         .find(|s| s.kind == "notebook")
 }
 
-#[allow(dead_code)]
-static VENV_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+// ==================== BACKEND SELECTION ====================
 
 /// Connect-mode backend selector, read from `NB_TEST_BACKEND`. Defaults to
 /// unset (empty string), which maps to `.test-venv` — the local-execution venv
@@ -111,78 +145,81 @@ pub fn has_uv() -> bool {
         .unwrap_or(false)
 }
 
-/// Check if Python 3 is available
-#[allow(dead_code)]
-pub fn has_python3() -> bool {
-    Command::new("python3")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+// ==================== FIXTURE HELPERS ====================
+
+/// Copy a fixture file from tests/fixtures/ to a destination path.
+pub fn copy_fixture(fixture_name: &str, dest_path: &std::path::Path) {
+    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join(fixture_name);
+    std::fs::copy(&fixture_path, dest_path)
+        .unwrap_or_else(|_| panic!("Failed to copy fixture {}", fixture_name));
 }
 
-/// Setup test virtual environment with execution dependencies
-/// Returns the path to the venv if successful
-#[allow(dead_code)]
-pub fn setup_execution_venv() -> Option<PathBuf> {
-    let mutex = VENV_PATH.get_or_init(|| {
-        let venv_path = initialize_venv();
-        Mutex::new(venv_path)
-    });
+/// Copy an entire fixture directory (recursively) to a destination path.
+pub fn copy_fixture_dir(fixture_subdir: &str, dest_path: &std::path::Path) {
+    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join(fixture_subdir);
 
-    mutex.lock().unwrap().clone()
-}
-
-#[allow(dead_code)]
-fn initialize_venv() -> Option<PathBuf> {
-    if !has_uv() || !has_python3() {
-        eprintln!("⚠️  Skipping execution test setup: uv or python3 not available");
-        return None;
+    fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(dst)?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            let ty = entry.file_type()?;
+            let src_path = entry.path();
+            let dst_path = dst.join(entry.file_name());
+            if ty.is_dir() {
+                copy_dir_recursive(&src_path, &dst_path)?;
+            } else {
+                std::fs::copy(&src_path, &dst_path)?;
+            }
+        }
+        Ok(())
     }
 
+    copy_dir_recursive(&fixture_path, dest_path)
+        .unwrap_or_else(|_| panic!("Failed to copy fixture directory {}", fixture_subdir));
+}
+
+// ==================== VENV HELPERS ====================
+
+static VENV_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Return the path to the pre-built test venv (created by setup_test_env.sh).
+/// Returns None and prints a hint if the venv doesn't exist.
+#[allow(dead_code)]
+pub fn setup_execution_venv() -> Option<PathBuf> {
+    VENV_PATH.get_or_init(find_venv).clone()
+}
+
+fn find_venv() -> Option<PathBuf> {
     let test_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
     let venv_path = test_dir.join(venv_dir_name());
 
-    // Create venv if it doesn't exist
-    if !venv_path.exists() {
-        eprintln!("📦 Creating test venv with uv...");
-        let status = Command::new("uv")
-            .args(["venv", venv_path.to_str().unwrap()])
-            .status();
+    let python_bin = if cfg!(windows) {
+        venv_path.join("Scripts").join("python.exe")
+    } else {
+        venv_path.join("bin").join("python")
+    };
 
-        if status.map(|s| !s.success()).unwrap_or(true) {
-            eprintln!("⚠️  Failed to create test venv");
-            return None;
-        }
-    }
-
-    // Install ipykernel for Python kernel
-    eprintln!("📦 Installing ipykernel...");
-    let status = Command::new("uv")
-        .args([
-            "pip",
-            "install",
-            "--python",
-            venv_path.to_str().unwrap(),
-            "ipykernel",
-        ])
-        .status();
-
-    if status.map(|s| s.success()).unwrap_or(false) {
-        eprintln!("✅ Test venv ready at: {}", venv_path.display());
+    if python_bin.exists() {
         Some(venv_path)
     } else {
-        eprintln!("⚠️  Failed to install dependencies in test venv");
+        eprintln!(
+            "⚠️  Test venv not found at {}. Run ./tests/setup_test_env.sh first.",
+            venv_path.display()
+        );
         None
     }
 }
 
-/// Set environment to use test venv for execution
+/// Build a PATH string that prepends the test venv's bin directory.
 #[allow(dead_code)]
 pub fn setup_venv_environment() -> Option<String> {
-    let mutex = VENV_PATH.get()?;
-    let venv_path = mutex.lock().unwrap();
-    let venv_path = venv_path.as_ref()?;
+    let venv_path = VENV_PATH.get()?.as_ref()?;
 
     let bin_path = if cfg!(windows) {
         venv_path.join("Scripts")
@@ -190,9 +227,6 @@ pub fn setup_venv_environment() -> Option<String> {
         venv_path.join("bin")
     };
 
-    // Prepend venv bin to PATH
     let current_path = std::env::var("PATH").unwrap_or_default();
-    let new_path = format!("{}:{}", bin_path.display(), current_path);
-
-    Some(new_path)
+    Some(format!("{}:{}", bin_path.display(), current_path))
 }

@@ -1,9 +1,9 @@
 mod test_helpers;
 
-use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
+use test_helpers::CommandResult;
 
 /// Helper struct to manage test environment
 struct TestEnv {
@@ -34,44 +34,15 @@ impl TestEnv {
         self.temp_dir.path().join(name)
     }
 
-    /// Copy a fixture notebook to the test environment
     fn copy_fixture(&self, fixture_name: &str, dest_name: &str) -> PathBuf {
-        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures")
-            .join(fixture_name);
         let dest_path = self.notebook_path(dest_name);
-        fs::copy(&fixture_path, &dest_path)
-            .unwrap_or_else(|_| panic!("Failed to copy fixture {}", fixture_name));
+        test_helpers::copy_fixture(fixture_name, &dest_path);
         dest_path
     }
 
-    /// Copy an entire fixture directory (with subdirectories) to the test environment
     fn copy_fixture_dir(&self, fixture_subdir: &str, dest_name: &str) -> PathBuf {
-        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures")
-            .join(fixture_subdir);
         let dest_path = self.notebook_path(dest_name);
-
-        fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
-            fs::create_dir_all(dst)?;
-            for entry in fs::read_dir(src)? {
-                let entry = entry?;
-                let ty = entry.file_type()?;
-                let src_path = entry.path();
-                let dst_path = dst.join(entry.file_name());
-                if ty.is_dir() {
-                    copy_dir_recursive(&src_path, &dst_path)?;
-                } else {
-                    fs::copy(&src_path, &dst_path)?;
-                }
-            }
-            Ok(())
-        }
-
-        copy_dir_recursive(&fixture_path, &dest_path)
-            .unwrap_or_else(|_| panic!("Failed to copy fixture directory {}", fixture_subdir));
+        test_helpers::copy_fixture_dir(fixture_subdir, &dest_path);
         dest_path
     }
 
@@ -90,34 +61,6 @@ impl TestEnv {
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
             success: output.status.success(),
         }
-    }
-}
-
-struct CommandResult {
-    stdout: String,
-    stderr: String,
-    success: bool,
-}
-
-impl CommandResult {
-    fn assert_success(self) -> Self {
-        if !self.success {
-            panic!(
-                "Command failed:\nStderr: {}\nStdout: {}",
-                self.stderr, self.stdout
-            );
-        }
-        self
-    }
-
-    fn assert_failure(self) -> Self {
-        if self.success {
-            panic!(
-                "Expected command to fail but it succeeded:\nStdout: {}\nStderr: {}",
-                self.stdout, self.stderr
-            );
-        }
-        self
     }
 }
 
@@ -292,16 +235,62 @@ fn test_execute_notebook_with_range() {
 
     let nb_path = env.copy_fixture("for_execution.ipynb", "test.ipynb");
 
-    // Execute only cells 0-1
-    env.run(&[
-        "execute",
-        nb_path.to_str().unwrap(),
-        "--start",
-        "0",
-        "--end",
-        "1",
-    ])
-    .assert_success();
+    // for_execution.ipynb: cell 0=(x=42), cell 1=(y=x+10), cell 2=(print result)
+    // --start 0 --end 1 must execute cells 0 and 1 only; cell 2 must not run.
+    let result = env
+        .run(&[
+            "execute",
+            nb_path.to_str().unwrap(),
+            "--start",
+            "0",
+            "--end",
+            "1",
+            "--json",
+        ])
+        .assert_success();
+
+    let json: serde_json::Value =
+        serde_json::from_str(&result.stdout).expect("--json must produce valid JSON");
+    let code_cells: Vec<_> = json["cells"]
+        .as_array()
+        .expect("cells must be an array")
+        .iter()
+        .filter(|c| c["cell_type"] == "code")
+        .collect();
+    assert_eq!(code_cells.len(), 3, "fixture must have 3 code cells");
+    assert!(
+        code_cells[0]["execution_count"].is_number(),
+        "cell 0 must have executed"
+    );
+    assert!(
+        code_cells[1]["execution_count"].is_number(),
+        "cell 1 must have executed"
+    );
+    assert!(
+        code_cells[2]["execution_count"].is_null(),
+        "cell 2 must NOT have executed (outside range)\nexecution_count: {:?}",
+        code_cells[2]["execution_count"]
+    );
+}
+
+#[test]
+fn test_execute_with_restart_kernel() {
+    let Some(env) = TestEnv::new() else {
+        eprintln!("⚠️  Skipping test: execution environment not available");
+        return;
+    };
+
+    let nb_path = env.copy_fixture("for_execution.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["execute", nb_path.to_str().unwrap(), "--restart-kernel"])
+        .assert_success();
+
+    assert!(
+        result.stdout.contains("Result: 52"),
+        "--restart-kernel must still produce correct output\nStdout: {}",
+        result.stdout
+    );
 }
 
 #[test]
@@ -439,35 +428,6 @@ fn test_execute_last_cell_with_negative_index() {
 }
 
 #[test]
-#[ignore] // Dry-run feature not available in unified execute command
-fn test_execute_dry_run() {
-    let Some(env) = TestEnv::new() else {
-        eprintln!("⚠️  Skipping test: execution environment not available");
-        return;
-    };
-
-    let nb_path = env.copy_fixture("for_execution.ipynb", "test.ipynb");
-
-    // Execute with --dry-run
-    env.run(&[
-        "execute",
-        nb_path.to_str().unwrap(),
-        "--cell-index",
-        "0",
-        "--dry-run",
-    ])
-    .assert_success();
-
-    // Verify notebook wasn't modified (no execution count)
-    let result = env
-        .run(&["read", nb_path.to_str().unwrap()])
-        .assert_success();
-
-    // Execution count should still be null for dry run
-    assert!(result.stdout.contains("\"execution_count\": null"));
-}
-
-#[test]
 fn test_execute_json_format() {
     let Some(env) = TestEnv::new() else {
         eprintln!("⚠️  Skipping test: execution environment not available");
@@ -489,10 +449,7 @@ fn test_execute_json_format() {
     // Should output valid JSON with cells and summary
     let json: serde_json::Value =
         serde_json::from_str(&result.stdout).expect("Should output valid JSON");
-    assert!(
-        json.get("success").is_some(),
-        "JSON should have success field"
-    );
+    assert_eq!(json["success"], true, "JSON success field must be true");
     assert!(json.get("cells").is_some(), "JSON should have cells array");
 }
 
