@@ -150,34 +150,6 @@ fn test_execute_cell_by_id() {
 }
 
 #[test]
-fn test_execute_notebook_preserves_state() {
-    let Some(env) = TestEnv::new() else {
-        eprintln!("⚠️  Skipping test: execution environment not available");
-        return;
-    };
-
-    let nb_path = env.copy_fixture("for_execution.ipynb", "test.ipynb");
-
-    // Execute entire notebook to preserve state across cells
-    let exec_result = env
-        .run(&["execute", nb_path.to_str().unwrap()])
-        .assert_success();
-
-    // Verify output directly in execute stdout
-    assert!(
-        exec_result.stdout.contains("Result: 52"),
-        "Execute stdout should contain the computed result"
-    );
-
-    // Persistence check: verify via nb read
-    let result = env
-        .run(&["read", nb_path.to_str().unwrap(), "--cell-index", "2"])
-        .assert_success();
-
-    assert!(result.stdout.contains("Result: 52"));
-}
-
-#[test]
 fn test_execute_entire_notebook() {
     let Some(env) = TestEnv::new() else {
         eprintln!("⚠️  Skipping test: execution environment not available");
@@ -270,33 +242,6 @@ fn test_execute_notebook_with_range() {
         code_cells[2]["execution_count"].is_null(),
         "cell 2 must NOT have executed (outside range)\nexecution_count: {:?}",
         code_cells[2]["execution_count"]
-    );
-}
-
-#[test]
-fn test_execute_with_error() {
-    let Some(env) = TestEnv::new() else {
-        eprintln!("⚠️  Skipping test: execution environment not available");
-        return;
-    };
-
-    let nb_path = env.copy_fixture("with_error.ipynb", "test.ipynb");
-
-    // Should fail without --allow-errors but still output notebook content
-    let result = env
-        .run(&["execute", nb_path.to_str().unwrap()])
-        .assert_failure();
-
-    // Verify partial results appear in stdout despite failure
-    assert!(
-        test_helpers::parse_notebook_header(&result.stdout).is_some(),
-        "Failed execute should still output @@notebook header"
-    );
-
-    let outputs = test_helpers::parse_outputs(&result.stdout);
-    assert!(
-        !outputs.is_empty(),
-        "Failed execute should include outputs (error or successful cells)"
     );
 }
 

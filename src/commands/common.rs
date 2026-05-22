@@ -430,6 +430,16 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_execution_mode_flag_error_cases() {
+        let server = Some("http://localhost:8888".to_string());
+        let token = Some("tok".to_string());
+
+        assert!(resolve_execution_mode(server.clone(), None).is_err());
+        assert!(resolve_execution_mode(None, token.clone()).is_err());
+        assert!(resolve_execution_mode(server, token).is_ok());
+    }
+
+    #[test]
     fn test_notebook_path_for_server_fallbacks() {
         // No server root → input returned unchanged
         assert_eq!(

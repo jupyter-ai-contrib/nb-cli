@@ -199,10 +199,8 @@ mod tests {
 
     #[test]
     fn test_serde_env_manager_omitted_when_none() {
-        // env_manager has #[serde(skip_serializing_if = "Option::is_none")].
-        // When None, the key must be absent from the serialized JSON — not present as null.
-        // This matters for forward compatibility: old server configs written without
-        // env_manager should continue to deserialize correctly.
+        // skip_serializing_if means None fields must be absent, not null —
+        // required for forward compat with configs written before these fields existed.
         let config = Config {
             version: String::new(),
             connection: Some(make_connection("http://127.0.0.1:8888", "tok")),
