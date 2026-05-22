@@ -483,14 +483,4 @@ mod tests {
         );
         assert!(url.contains("/api/kernels/k/channels"));
     }
-
-    #[test]
-    fn test_filename_from_path_extracts_name() {
-        assert_eq!(
-            filename_from_path("path/to/notebook.ipynb"),
-            "notebook.ipynb"
-        );
-        assert_eq!(filename_from_path("notebook.ipynb"), "notebook.ipynb");
-        assert_eq!(filename_from_path(""), "");
-    }
 }

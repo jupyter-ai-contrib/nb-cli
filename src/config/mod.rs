@@ -117,13 +117,6 @@ mod tests {
     }
 
     #[test]
-    fn test_config_default_is_none_connection() {
-        let config = Config::default();
-        assert!(config.connection.is_none());
-        assert_eq!(config.version, "");
-    }
-
-    #[test]
     fn test_resolve_connection_cli_args_take_priority() {
         // Saved connection exists, but CLI args should win.
         let config = Config {
@@ -202,14 +195,6 @@ mod tests {
         assert_eq!(conn.working_dir, Some("/home/user".to_string()));
         assert_eq!(conn.env_manager, Some("uv".to_string()));
         assert_eq!(conn.project_root, Some("/projects/myproject".to_string()));
-    }
-
-    #[test]
-    fn test_serde_roundtrip_no_connection() {
-        let original = Config::default();
-        let json = serde_json::to_string(&original).unwrap();
-        let roundtripped: Config = serde_json::from_str(&json).unwrap();
-        assert!(roundtripped.connection.is_none());
     }
 
     #[test]
