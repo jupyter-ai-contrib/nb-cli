@@ -388,11 +388,7 @@ fn test_restart_kernel_then_full_notebook_works() {
     );
 }
 
-/// Execute a notebook from a CWD that differs from the server root.
-///
-/// This is the most common agent workflow: the agent runs from a project
-/// directory while the Jupyter server is rooted elsewhere. The notebook
-/// is read from the server via the Contents API.
+/// Execute from a CWD that differs from the server root.
 #[test]
 fn test_execute_from_different_cwd() {
     let Some(ctx) = TestCtx::new() else {
