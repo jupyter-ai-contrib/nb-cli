@@ -1,10 +1,21 @@
 //! Y.js operations for notebook manipulation (add cell, update cell, etc.)
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use nbformat::v4::Cell;
-use yrs::{Any, Array, ArrayPrelim, Map, MapPrelim, MapRef, Text, TextPrelim, Transact};
+use yrs::types::ToJson;
+use yrs::{Any, Array, ArrayPrelim, ArrayRef, Map, MapPrelim, MapRef, Text, TextPrelim, Transact};
 
 use super::ydoc::YDocClient;
+
+/// Selector for which cells to clear outputs from
+pub enum ClearCellSelector {
+    /// Clear all code cells
+    All,
+    /// Clear a specific cell by ID
+    ById(String),
+    /// Clear a specific cell by index (supports negative indexing)
+    ByIndex(i32),
+}
 
 /// Add a cell to the Y.js document
 fn add_cell_to_ydoc(doc: &yrs::Doc, cell: &Cell, index: usize) -> Result<()> {
@@ -254,4 +265,139 @@ fn update_cell_source_in_ydoc(
     cell_map.insert(&mut txn, "execution_count", Any::Null);
 
     Ok(())
+}
+
+/// Clear outputs and execution_count for cells via Y.js
+pub async fn ydoc_clear_outputs(
+    server_url: &str,
+    token: &str,
+    notebook_path: &str,
+    selector: ClearCellSelector,
+) -> Result<usize> {
+    let mut ydoc_client = YDocClient::connect(
+        server_url.to_string(),
+        token.to_string(),
+        notebook_path.to_string(),
+    )
+    .await?;
+
+    let cells_cleared = clear_outputs_in_ydoc(ydoc_client.get_doc(), selector)
+        .context("Failed to clear outputs in Y.js document")?;
+
+    ydoc_client.sync().await.context("Failed to sync changes")?;
+    ydoc_client.close().await?;
+
+    Ok(cells_cleared)
+}
+
+/// Clear outputs and execution_count for cells in the Y.js document
+fn clear_outputs_in_ydoc(doc: &yrs::Doc, selector: ClearCellSelector) -> Result<usize> {
+    let cells_array = doc.get_or_insert_array("cells");
+    let mut txn = doc.transact_mut();
+    let num_cells = cells_array.len(&txn) as usize;
+
+    // Determine which indices to clear
+    let indices: Vec<usize> = match selector {
+        ClearCellSelector::All => (0..num_cells)
+            .filter(|&i| {
+                cell_type_at(&cells_array, &txn, i)
+                    .map(|t| t == "code")
+                    .unwrap_or(false)
+            })
+            .collect(),
+        ClearCellSelector::ById(ref id) => {
+            let idx = (0..num_cells)
+                .find(|&i| {
+                    cell_id_at(&cells_array, &txn, i)
+                        .map(|cid| cid == *id)
+                        .unwrap_or(false)
+                })
+                .ok_or_else(|| anyhow::anyhow!("Cell with ID '{}' not found in notebook", id))?;
+            let ct = cell_type_at(&cells_array, &txn, idx).unwrap_or_default();
+            if ct != "code" {
+                bail!("Can only clear outputs from code cells");
+            }
+            vec![idx]
+        }
+        ClearCellSelector::ByIndex(raw_idx) => {
+            let idx = normalize_ydoc_index(raw_idx, num_cells)?;
+            let ct = cell_type_at(&cells_array, &txn, idx).unwrap_or_default();
+            if ct != "code" {
+                bail!("Can only clear outputs from code cells");
+            }
+            vec![idx]
+        }
+    };
+
+    // Clear outputs and execution_count for each target cell
+    for &i in &indices {
+        let cell_value = cells_array
+            .get(&txn, i as u32)
+            .context("Cell index out of bounds")?;
+        let cell_map: MapRef = cell_value
+            .cast()
+            .map_err(|_| anyhow::anyhow!("Cell is not a Map"))?;
+
+        // Clear outputs array
+        if let Some(outputs_val) = cell_map.get(&txn, "outputs") {
+            if let Ok(arr) = outputs_val.cast::<ArrayRef>() {
+                let len = arr.len(&txn);
+                if len > 0 {
+                    arr.remove_range(&mut txn, 0, len);
+                }
+            }
+        }
+
+        // Set execution_count to null
+        cell_map.insert(&mut txn, "execution_count", Any::Null);
+    }
+
+    Ok(indices.len())
+}
+
+/// Read cell_type string from a cell in the Y.js cells array
+fn cell_type_at(cells_array: &ArrayRef, txn: &yrs::TransactionMut, index: usize) -> Option<String> {
+    let cell_value = cells_array.get(txn, index as u32)?;
+    let cell_map: MapRef = cell_value.cast().ok()?;
+    let val = cell_map.get(txn, "cell_type")?;
+    match val.to_json(txn) {
+        Any::String(s) => Some(s.to_string()),
+        _ => None,
+    }
+}
+
+/// Read cell id string from a cell in the Y.js cells array
+fn cell_id_at(cells_array: &ArrayRef, txn: &yrs::TransactionMut, index: usize) -> Option<String> {
+    let cell_value = cells_array.get(txn, index as u32)?;
+    let cell_map: MapRef = cell_value.cast().ok()?;
+    let val = cell_map.get(txn, "id")?;
+    match val.to_json(txn) {
+        Any::String(s) => Some(s.to_string()),
+        _ => None,
+    }
+}
+
+/// Normalize a potentially negative index against a cell count
+fn normalize_ydoc_index(index: i32, len: usize) -> Result<usize> {
+    if index < 0 {
+        let abs = index.unsigned_abs() as usize;
+        if abs > len {
+            bail!(
+                "Cell index {} out of range (notebook has {} cells)",
+                index,
+                len
+            );
+        }
+        Ok(len - abs)
+    } else {
+        let idx = index as usize;
+        if idx >= len {
+            bail!(
+                "Cell index {} out of range (notebook has {} cells)",
+                index,
+                len
+            );
+        }
+        Ok(idx)
+    }
 }

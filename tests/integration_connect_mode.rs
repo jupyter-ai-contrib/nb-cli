@@ -410,3 +410,118 @@ fn test_execute_from_different_cwd() {
         result.stdout
     );
 }
+
+// ==================== CLEAR OUTPUTS TESTS ====================
+
+/// Clear all outputs from a notebook in connect mode.
+#[test]
+fn test_clear_outputs_in_connect_mode() {
+    let Some(ctx) = TestCtx::new() else {
+        eprintln!("⚠️  Skipping connect-mode test: jupyter server not available");
+        return;
+    };
+
+    ctx.copy_fixture("with_outputs.ipynb", "test_clear_all.ipynb");
+
+    // Clear all outputs
+    ctx.run(&["output", "clear", "test_clear_all.ipynb"])
+        .assert_success();
+
+    // Read back and verify outputs are gone
+    let result = ctx
+        .run(&["read", "test_clear_all.ipynb", "--json"])
+        .assert_success();
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&result.stdout).expect("Failed to parse JSON output");
+
+    // All code cells should have empty outputs and null execution_count
+    for cell in parsed["cells"].as_array().unwrap() {
+        if cell["cell_type"] == "code" {
+            let outputs = cell["outputs"].as_array().unwrap();
+            assert!(
+                outputs.is_empty(),
+                "Expected empty outputs after clear, got: {:?}",
+                outputs
+            );
+            assert!(
+                cell["execution_count"].is_null(),
+                "Expected null execution_count after clear"
+            );
+        }
+    }
+}
+
+/// Clear outputs from a specific cell by index in connect mode.
+#[test]
+fn test_clear_outputs_specific_cell_in_connect_mode() {
+    let Some(ctx) = TestCtx::new() else {
+        eprintln!("⚠️  Skipping connect-mode test: jupyter server not available");
+        return;
+    };
+
+    ctx.copy_fixture("with_outputs.ipynb", "test_clear_one.ipynb");
+
+    // Clear only cell at index 0
+    ctx.run(&[
+        "output",
+        "clear",
+        "test_clear_one.ipynb",
+        "--cell-index",
+        "0",
+    ])
+    .assert_success();
+
+    // Read back and verify only cell 0 is cleared
+    let result = ctx
+        .run(&["read", "test_clear_one.ipynb", "--json"])
+        .assert_success();
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&result.stdout).expect("Failed to parse JSON output");
+
+    let cells = parsed["cells"].as_array().unwrap();
+
+    // Cell 0 should be cleared
+    assert!(
+        cells[0]["outputs"].as_array().unwrap().is_empty(),
+        "Cell 0 outputs should be cleared"
+    );
+    assert!(
+        cells[0]["execution_count"].is_null(),
+        "Cell 0 execution_count should be null"
+    );
+
+    // Cell 1 should still have outputs
+    assert!(
+        !cells[1]["outputs"].as_array().unwrap().is_empty(),
+        "Cell 1 outputs should still be present"
+    );
+}
+
+/// Error when clearing outputs for a non-existent cell ID.
+#[test]
+fn test_clear_outputs_invalid_cell_id_in_connect_mode() {
+    let Some(ctx) = TestCtx::new() else {
+        eprintln!("⚠️  Skipping connect-mode test: jupyter server not available");
+        return;
+    };
+
+    ctx.copy_fixture("with_outputs.ipynb", "test_clear_bad_id.ipynb");
+
+    let result = ctx
+        .run(&[
+            "output",
+            "clear",
+            "test_clear_bad_id.ipynb",
+            "--cell",
+            "nonexistent-id",
+        ])
+        .assert_failure();
+
+    assert!(
+        result.stderr.contains("not found"),
+        "Expected 'not found' error message, got stderr: {}",
+        result.stderr
+    );
+}
