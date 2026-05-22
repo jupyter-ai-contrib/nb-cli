@@ -47,7 +47,24 @@ pub struct ReadArgs {
 
 pub fn execute(args: ReadArgs) -> Result<()> {
     let file_path = common::normalize_notebook_path(&args.file);
-    let notebook = notebook::read_notebook(&file_path)?;
+
+    // Read from server when connected, otherwise from local filesystem
+    let mode = common::resolve_execution_mode(None, None)?;
+    let notebook = match &mode {
+        crate::execution::types::ExecutionMode::Remote { server_url, token } => {
+            let server_root = common::resolve_server_root();
+            let server_path = common::notebook_path_for_server(&file_path, server_root.as_deref());
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(common::read_notebook_remote(
+                server_url,
+                token,
+                &server_path,
+            ))?
+        }
+        crate::execution::types::ExecutionMode::Local => notebook::read_notebook(&file_path)?,
+    };
 
     // Determine format: markdown (default) or JSON
     let format = if args.json {
