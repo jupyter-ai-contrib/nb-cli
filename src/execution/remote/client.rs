@@ -302,10 +302,62 @@ impl JupyterClient {
         Ok(())
     }
 
+    fn contents_url(&self, path: &str) -> Result<String> {
+        let mut url = url::Url::parse(&self.base_url).context("Invalid server URL")?;
+        {
+            let mut segments = url
+                .path_segments_mut()
+                .map_err(|_| anyhow::anyhow!("Server URL cannot be a base"))?;
+            segments.push("api").push("contents");
+            for part in path.split('/') {
+                if !part.is_empty() {
+                    segments.push(part);
+                }
+            }
+        }
+        Ok(url.to_string())
+    }
+
+    /// Read a notebook from the server via the Contents API.
+    pub async fn get_notebook(&self, path: &str) -> Result<nbformat::v4::Notebook> {
+        let url = self.contents_url(path)?;
+
+        let response = self
+            .client
+            .get(&url)
+            .query(&[
+                ("token", self.token.as_str()),
+                ("content", "1"),
+                ("type", "notebook"),
+            ])
+            .send()
+            .await
+            .context("Failed to fetch notebook from server")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to fetch notebook: HTTP {} - {}", status, text);
+        }
+
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .context("Failed to parse Contents API response")?;
+
+        let content = body
+            .get("content")
+            .cloned()
+            .context("Contents API response missing 'content' field")?;
+
+        serde_json::from_value::<nbformat::v4::Notebook>(content)
+            .context("Failed to parse notebook from server (expected nbformat v4)")
+    }
+
     /// Save a notebook to the server
     #[allow(dead_code)]
     pub async fn save_notebook(&self, path: &str, notebook: &nbformat::v4::Notebook) -> Result<()> {
-        let url = format!("{}/api/contents/{}", self.base_url, path);
+        let url = self.contents_url(path)?;
 
         let payload = serde_json::json!({
             "type": "notebook",
@@ -316,7 +368,7 @@ impl JupyterClient {
         let response = self
             .client
             .put(&url)
-            .query(&[("token", &self.token)])
+            .query(&[("token", self.token.as_str())])
             .json(&payload)
             .send()
             .await

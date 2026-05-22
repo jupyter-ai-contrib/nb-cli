@@ -1,4 +1,4 @@
-use crate::commands::common::OutputFormat;
+use crate::commands::common::{self, OutputFormat};
 use crate::commands::env_manager::EnvConfig;
 use crate::execution::local::discovery::find_kernel;
 use crate::notebook;
@@ -89,8 +89,28 @@ pub fn execute(args: CreateArgs) -> Result<()> {
     // Create notebook with specified kernel
     let notebook = create_notebook(&args)?;
 
-    // Write notebook to file
-    notebook::write_notebook_atomic(&path, &notebook).context("Failed to write notebook")?;
+    // Write notebook to appropriate destination
+    let mode = common::resolve_execution_mode(None, None)?;
+    match &mode {
+        crate::execution::types::ExecutionMode::Remote { server_url, token } => {
+            let server_root = common::resolve_server_root();
+            let server_path = common::notebook_path_for_server(&path, server_root.as_deref());
+            let client = crate::execution::remote::client::JupyterClient::new(
+                server_url.clone(),
+                token.clone(),
+            )?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime
+                .block_on(client.save_notebook(&server_path, &notebook))
+                .context("Failed to create notebook on server")?;
+        }
+        crate::execution::types::ExecutionMode::Local => {
+            notebook::write_notebook_atomic(&path, &notebook)
+                .context("Failed to write notebook")?;
+        }
+    }
 
     // Output result
     let result = CreateResult {

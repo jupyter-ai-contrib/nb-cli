@@ -67,8 +67,10 @@ async fn execute_with_realtime(
 ) -> Result<()> {
     use crate::execution::remote::ydoc_notebook_ops;
 
-    let (server_url, token) = match mode {
-        crate::execution::types::ExecutionMode::Remote { server_url, token } => (server_url, token),
+    let (server_url, token) = match &mode {
+        crate::execution::types::ExecutionMode::Remote { server_url, token } => {
+            (server_url.clone(), token.clone())
+        }
         _ => bail!("Expected remote execution mode"),
     };
 
@@ -79,8 +81,8 @@ async fn execute_with_realtime(
     let server_root = common::resolve_server_root();
     let notebook_server_path = common::notebook_path_for_server(&file_path, server_root.as_deref());
 
-    // Read notebook to calculate which cells to delete
-    let notebook = notebook::read_notebook(&file_path).context("Failed to read notebook")?;
+    // Read notebook from server (reuse the server-relative path)
+    let notebook = common::read_notebook_remote(&server_url, &token, &notebook_server_path).await?;
 
     // Collect indices to delete
     let mut indices_to_delete: HashSet<usize> = HashSet::new();
