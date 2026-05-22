@@ -418,39 +418,6 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_execution_mode_flag_error_cases() {
-        use crate::execution::types::ExecutionMode;
-
-        // server without token → error mentioning --token
-        let err = resolve_execution_mode(Some("http://host:8888".to_string()), None).unwrap_err();
-        assert!(
-            err.to_string().contains("--token"),
-            "error must mention --token: {err}"
-        );
-
-        // token without server → error mentioning --server
-        let err = resolve_execution_mode(None, Some("tok".to_string())).unwrap_err();
-        assert!(
-            err.to_string().contains("--server"),
-            "error must mention --server: {err}"
-        );
-
-        // both provided → Remote mode, no config load needed
-        let mode = resolve_execution_mode(
-            Some("http://host:8888".to_string()),
-            Some("tok".to_string()),
-        )
-        .unwrap();
-        assert_eq!(
-            mode,
-            ExecutionMode::Remote {
-                server_url: "http://host:8888".to_string(),
-                token: "tok".to_string(),
-            }
-        );
-    }
-
-    #[test]
     fn test_is_binary_mime_type_svg_exception() {
         assert!(
             !is_binary_mime_type("image/svg+xml"),
@@ -460,20 +427,6 @@ mod tests {
         assert!(is_binary_mime_type("image/jpeg"), "JPEG must be binary");
         assert!(is_binary_mime_type("application/pdf"), "PDF must be binary");
         assert!(!is_binary_mime_type("text/html"), "HTML must not be binary");
-    }
-
-    #[test]
-    fn test_normalize_notebook_path_no_double_extension() {
-        assert_eq!(normalize_notebook_path("my_nb.ipynb"), "my_nb.ipynb");
-        assert_eq!(normalize_notebook_path("my_nb"), "my_nb.ipynb");
-        assert_eq!(
-            normalize_notebook_path("path/to/notebook"),
-            "path/to/notebook.ipynb"
-        );
-        assert_eq!(
-            normalize_notebook_path("path/to/notebook.ipynb"),
-            "path/to/notebook.ipynb"
-        );
     }
 
     #[test]

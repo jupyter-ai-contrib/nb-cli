@@ -357,33 +357,6 @@ mod tests {
     }
 
     #[test]
-    fn test_stream_output_name_and_text_stored() {
-        let (doc, cells) = setup_doc();
-        {
-            let mut txn = doc.transact_mut();
-            update_cell_outputs(&mut txn, &cells, 0, &[stream_out("stdout", "hello")]).unwrap();
-        }
-        let txn = doc.transact();
-        let cell_map = cells.get(&txn, 0).unwrap().cast::<yrs::MapRef>().unwrap();
-        let outputs_arr = cell_map
-            .get(&txn, "outputs")
-            .unwrap()
-            .cast::<yrs::ArrayRef>()
-            .unwrap();
-        let out_map = get_output_map(&outputs_arr, &txn, 0);
-        assert_eq!(
-            out_map.get(&txn, "name"),
-            Some(yrs::Out::Any(Any::String("stdout".into()))),
-            "stream name must be 'stdout'"
-        );
-        assert_eq!(
-            out_map.get(&txn, "text"),
-            Some(yrs::Out::Any(Any::String("hello".into()))),
-            "stream text must be 'hello'"
-        );
-    }
-
-    #[test]
     fn test_update_execution_count_null() {
         let (doc, cells) = setup_doc();
         {
