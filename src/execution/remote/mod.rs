@@ -259,28 +259,60 @@ impl ExecutionBackend for RemoteExecutor {
             } else {
                 tokio::select! {
                     kernel_msg = ws.recv_message() => {
-                        if let Some(msg) = kernel_msg? {
-                            let is_ours = msg.parent_header.as_ref()
-                                .map(|h| h.msg_id == msg_id).unwrap_or(false);
-                            if is_ours {
-                                match &msg.content {
-                                    JupyterMessageContent::ExecuteInput(input) => {
-                                        expected_ec = Some(input.execution_count.0 as i64);
-                                    }
-                                    JupyterMessageContent::Status(status) => {
-                                        if matches!(status.execution_state,
-                                            jupyter_protocol::ExecutionState::Idle) {
-                                            idle_received = true;
+                        match kernel_msg? {
+                            Some(msg) => {
+                                let is_ours = msg.parent_header.as_ref()
+                                    .map(|h| h.msg_id == msg_id).unwrap_or(false);
+                                if is_ours {
+                                    match &msg.content {
+                                        JupyterMessageContent::ExecuteInput(input) => {
+                                            expected_ec = Some(input.execution_count.0 as i64);
                                         }
+                                        JupyterMessageContent::Status(status) => {
+                                            if matches!(status.execution_state,
+                                                jupyter_protocol::ExecutionState::Idle) {
+                                                idle_received = true;
+                                            }
+                                        }
+                                        _ => {}
                                     }
-                                    _ => {}
                                 }
                             }
+                            None => break,
                         }
                     }
                     ydoc_result = ydoc.recv_update() => {
                         ydoc_result.context("Y.js update error")?;
                     }
+                    _ = tokio::time::sleep_until(deadline) => {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Fallback: loop exited via timeout or WS close.
+        // Collect any outputs we haven't seen yet.
+        if let Ok(cell_data) = ydoc.read_cell_outputs(cell_idx) {
+            for (idx, url_path) in &cell_data.externalized_urls {
+                if fetched_urls.insert(url_path.clone()) {
+                    seen_indices.insert(*idx);
+                    if let Some(output) =
+                        Self::fetch_output(&http, &self.server_url, &self.token, url_path).await
+                    {
+                        if let Some(cb) = &on_output {
+                            cb(&output);
+                        }
+                        outputs.push(output);
+                    }
+                }
+            }
+            for (idx, output) in &cell_data.inline_outputs {
+                if seen_indices.insert(*idx) {
+                    if let Some(cb) = &on_output {
+                        cb(output);
+                    }
+                    outputs.push(output.clone());
                 }
             }
         }
@@ -289,7 +321,25 @@ impl ExecutionBackend for RemoteExecutor {
             .read_cell_outputs(cell_idx)
             .ok()
             .and_then(|c| c.execution_count);
-        Ok(ExecutionResult::success(outputs, ec))
+        let has_error = outputs
+            .iter()
+            .any(|o| matches!(o, nbformat::v4::Output::Error(_)));
+        if has_error {
+            let error_info = outputs.iter().find_map(|o| {
+                if let nbformat::v4::Output::Error(err) = o {
+                    Some(ExecutionError {
+                        ename: err.ename.clone(),
+                        evalue: err.evalue.clone(),
+                        traceback: err.traceback.clone(),
+                    })
+                } else {
+                    None
+                }
+            });
+            Ok(ExecutionResult::error(outputs, ec, error_info.unwrap()))
+        } else {
+            Ok(ExecutionResult::success(outputs, ec))
+        }
     }
 
     async fn stop(&mut self) -> Result<()> {
