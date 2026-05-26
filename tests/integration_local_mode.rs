@@ -247,6 +247,43 @@ fn test_read_empty_notebook() {
 }
 
 #[test]
+fn test_read_legacy_v44_notebook() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("legacy_v44.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--json"])
+        .assert_success();
+
+    let json = result.json_value();
+    let cells = json["cells"].as_array().unwrap();
+    assert_eq!(cells.len(), 2);
+    assert_eq!(cells[0]["cell_type"], "code");
+    assert_eq!(cells[1]["cell_type"], "markdown");
+    // Verify cell IDs were generated during upgrade
+    assert!(cells[0]["id"].as_str().is_some());
+    assert!(cells[1]["id"].as_str().is_some());
+}
+
+#[test]
+fn test_read_legacy_v3_notebook() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("legacy_v3.ipynb", "test.ipynb");
+
+    let result = env
+        .run(&["read", nb_path.to_str().unwrap(), "--json"])
+        .assert_success();
+
+    let json = result.json_value();
+    let cells = json["cells"].as_array().unwrap();
+    assert_eq!(cells.len(), 2);
+    assert_eq!(cells[0]["cell_type"], "code");
+    assert_eq!(cells[1]["cell_type"], "markdown");
+    assert!(cells[0]["id"].as_str().is_some());
+    assert!(cells[1]["id"].as_str().is_some());
+}
+
+#[test]
 fn test_read_notebook_with_cells() {
     let env = TestEnv::new();
     let nb_path = env.copy_fixture("with_code.ipynb", "test.ipynb");
