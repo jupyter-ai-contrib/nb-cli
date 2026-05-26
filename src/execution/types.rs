@@ -105,6 +105,28 @@ impl ExecutionResult {
             error: Some(error),
         }
     }
+
+    /// Build a result by inspecting outputs for errors in a single pass.
+    pub fn from_outputs(
+        outputs: Vec<nbformat::v4::Output>,
+        execution_count: Option<i64>,
+    ) -> Self {
+        let error_info = outputs.iter().find_map(|o| {
+            if let nbformat::v4::Output::Error(err) = o {
+                Some(ExecutionError {
+                    ename: err.ename.clone(),
+                    evalue: err.evalue.clone(),
+                    traceback: err.traceback.clone(),
+                })
+            } else {
+                None
+            }
+        });
+        match error_info {
+            Some(err) => Self::error(outputs, execution_count, err),
+            None => Self::success(outputs, execution_count),
+        }
+    }
 }
 
 /// Output from a single execution message

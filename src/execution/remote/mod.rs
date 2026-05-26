@@ -7,7 +7,7 @@ pub mod websocket;
 pub mod ydoc;
 pub mod ydoc_notebook_ops;
 
-use crate::execution::types::{ExecutionConfig, ExecutionError, ExecutionResult};
+use crate::execution::types::{ExecutionConfig, ExecutionResult};
 use crate::execution::ExecutionBackend;
 use anyhow::{Context, Result};
 use client::{JupyterClient, SessionInfo};
@@ -227,25 +227,7 @@ impl ExecutionBackend for RemoteExecutor {
                 }
 
                 if idle_received {
-                    let has_error = outputs
-                        .iter()
-                        .any(|o| matches!(o, nbformat::v4::Output::Error(_)));
-                    let error_info = outputs.iter().find_map(|o| {
-                        if let nbformat::v4::Output::Error(err) = o {
-                            Some(ExecutionError {
-                                ename: err.ename.clone(),
-                                evalue: err.evalue.clone(),
-                                traceback: err.traceback.clone(),
-                            })
-                        } else {
-                            None
-                        }
-                    });
-                    return if has_error {
-                        Ok(ExecutionResult::error(outputs, ec, error_info.unwrap()))
-                    } else {
-                        Ok(ExecutionResult::success(outputs, ec))
-                    };
+                    return Ok(ExecutionResult::from_outputs(outputs, ec));
                 }
             }
 
@@ -293,7 +275,7 @@ impl ExecutionBackend for RemoteExecutor {
 
         // Fallback: loop exited via timeout or WS close.
         // Collect any outputs we haven't seen yet.
-        if let Ok(cell_data) = ydoc.read_cell_outputs(cell_idx) {
+        let ec = if let Ok(cell_data) = ydoc.read_cell_outputs(cell_idx) {
             for (idx, url_path) in &cell_data.externalized_urls {
                 if fetched_urls.insert(url_path.clone()) {
                     seen_indices.insert(*idx);
@@ -315,31 +297,12 @@ impl ExecutionBackend for RemoteExecutor {
                     outputs.push(output.clone());
                 }
             }
-        }
-
-        let ec = ydoc
-            .read_cell_outputs(cell_idx)
-            .ok()
-            .and_then(|c| c.execution_count);
-        let has_error = outputs
-            .iter()
-            .any(|o| matches!(o, nbformat::v4::Output::Error(_)));
-        if has_error {
-            let error_info = outputs.iter().find_map(|o| {
-                if let nbformat::v4::Output::Error(err) = o {
-                    Some(ExecutionError {
-                        ename: err.ename.clone(),
-                        evalue: err.evalue.clone(),
-                        traceback: err.traceback.clone(),
-                    })
-                } else {
-                    None
-                }
-            });
-            Ok(ExecutionResult::error(outputs, ec, error_info.unwrap()))
+            cell_data.execution_count
         } else {
-            Ok(ExecutionResult::success(outputs, ec))
-        }
+            None
+        };
+
+        Ok(ExecutionResult::from_outputs(outputs, ec))
     }
 
     async fn stop(&mut self) -> Result<()> {
