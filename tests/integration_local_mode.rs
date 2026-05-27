@@ -266,6 +266,49 @@ fn test_read_legacy_v44_notebook() {
 }
 
 #[test]
+fn test_read_legacy_v44_does_not_modify_file() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("legacy_v44.ipynb", "test.ipynb");
+
+    let before = fs::read_to_string(&nb_path).unwrap();
+    env.run(&["read", nb_path.to_str().unwrap()])
+        .assert_success();
+    let after = fs::read_to_string(&nb_path).unwrap();
+
+    // Read is non-mutating — file on disk must stay unchanged
+    assert_eq!(before, after);
+}
+
+#[test]
+fn test_add_cell_to_legacy_v44_upgrades_to_v45() {
+    let env = TestEnv::new();
+    let nb_path = env.copy_fixture("legacy_v44.ipynb", "test.ipynb");
+
+    let before: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&nb_path).unwrap()).unwrap();
+    assert_eq!(before["nbformat_minor"], 4);
+
+    env.run(&[
+        "cell",
+        "add",
+        nb_path.to_str().unwrap(),
+        "--source",
+        "print('new')",
+    ])
+    .assert_success();
+
+    let after: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&nb_path).unwrap()).unwrap();
+    // Mutating command writes v4.5 with cell IDs
+    assert_eq!(after["nbformat_minor"], 5);
+    assert!(after["cells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|c| c["id"].as_str().is_some()));
+}
+
+#[test]
 fn test_read_legacy_v3_notebook() {
     let env = TestEnv::new();
     let nb_path = env.copy_fixture("legacy_v3.ipynb", "test.ipynb");
