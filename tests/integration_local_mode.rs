@@ -260,7 +260,7 @@ fn test_read_legacy_v44_notebook() {
     assert_eq!(cells.len(), 2);
     assert_eq!(cells[0]["cell_type"], "code");
     assert_eq!(cells[1]["cell_type"], "markdown");
-    // Verify cell IDs were generated during upgrade
+    // Verify cell IDs added in schema v4.5 that nb-cli depends on were generated during upgrade
     assert!(cells[0]["id"].as_str().is_some());
     assert!(cells[1]["id"].as_str().is_some());
 }
@@ -279,6 +279,7 @@ fn test_read_legacy_v3_notebook() {
     assert_eq!(cells.len(), 2);
     assert_eq!(cells[0]["cell_type"], "code");
     assert_eq!(cells[1]["cell_type"], "markdown");
+    // Verify cell IDs added in schema v4.5 that nb-cli depends on were generated during upgrade
     assert!(cells[0]["id"].as_str().is_some());
     assert!(cells[1]["id"].as_str().is_some());
 }
