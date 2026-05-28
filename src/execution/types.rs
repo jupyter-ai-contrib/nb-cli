@@ -107,10 +107,7 @@ impl ExecutionResult {
     }
 
     /// Build a result by inspecting outputs for errors in a single pass.
-    pub fn from_outputs(
-        outputs: Vec<nbformat::v4::Output>,
-        execution_count: Option<i64>,
-    ) -> Self {
+    pub fn from_outputs(outputs: Vec<nbformat::v4::Output>, execution_count: Option<i64>) -> Self {
         let error_info = outputs.iter().find_map(|o| {
             if let nbformat::v4::Output::Error(err) = o {
                 Some(ExecutionError {
