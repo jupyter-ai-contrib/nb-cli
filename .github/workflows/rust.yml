@@ -25,7 +25,7 @@ jobs:
       run: cargo clippy -- -D warnings
 
   test:
-
+    name: test local
     runs-on: ubuntu-latest
 
     steps:
@@ -136,7 +136,7 @@ jobs:
       run: NB_TEST_BACKEND=jupyter-collaboration cargo test --test integration_connect_mode -- --test-threads=1
 
   test-windows:
-    name: Test (Windows)
+    name: test local (windows)
     runs-on: windows-latest
     permissions:
       contents: write
