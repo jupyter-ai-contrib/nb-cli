@@ -4,13 +4,21 @@ use std::time::Duration;
 
 use crate::commands::env_manager::EnvConfig;
 
-/// Execution mode: local (direct kernel) or remote (Jupyter server)
+/// Execution mode: local (direct kernel), remote (Jupyter server), or remote-kernel (gateway)
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExecutionMode {
     /// Local execution via direct kernel connection
     Local,
     /// Remote execution via Jupyter Server API
     Remote { server_url: String, token: String },
+    /// Remote kernel execution via Jupyter Kernel Gateway
+    RemoteKernel {
+        gateway_url: String,
+        token: String,
+        kernel_id: Option<String>,
+        /// Authorization scheme used with `token`, e.g. "token" or "Bearer".
+        auth_scheme: String,
+    },
 }
 
 /// Configuration for code execution

@@ -37,9 +37,9 @@ dirs = "5.0"
 dialoguer = "0.11"
 chrono = { version = "0.4", features = ["serde"] }
 
-# Remote mode dependencies
+# Remote mode dependencies (server + kernel-gateway WS)
 reqwest = { version = "0.11", features = ["json", "native-tls-vendored"] }
-tokio-tungstenite = "0.21"
+tokio-tungstenite = { version = "0.21", features = ["native-tls-vendored"] }
 futures-util = "0.3"
 url = "2.5"
 

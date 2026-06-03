@@ -43,12 +43,28 @@ pub struct ExecuteNotebookArgs {
     pub end: Option<i32>,
 
     /// Remote server URL (enables remote mode)
-    #[arg(long)]
+    #[arg(long, conflicts_with = "gateway")]
     pub server: Option<String>,
 
     /// Authentication token for remote server
     #[arg(long)]
     pub token: Option<String>,
+
+    /// Kernel gateway URL (enables remote-kernel mode, e.g. http://host:8888)
+    #[arg(long, conflicts_with = "server")]
+    pub gateway: Option<String>,
+
+    /// Authentication token for kernel gateway
+    #[arg(long, requires = "gateway")]
+    pub gateway_token: Option<String>,
+
+    /// Authorization scheme for the gateway token (e.g. "token", "Bearer")
+    #[arg(long, requires = "gateway", default_value = "token")]
+    pub gateway_auth_scheme: String,
+
+    /// Kernel ID on the gateway (auto-discovered if omitted)
+    #[arg(long, requires = "gateway")]
+    pub kernel_id: Option<String>,
 
     /// Output in JSON format instead of text
     #[arg(long)]
@@ -103,9 +119,23 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
 
     let file_path = common::normalize_notebook_path(&args.file);
 
-    // Determine execution mode before reading — remote mode reads from server
-    let mode =
-        crate::commands::common::resolve_execution_mode(args.server.clone(), args.token.clone())?;
+    // Determine execution mode before reading — remote (server) mode reads
+    // from the server, remote-kernel mode reads locally but executes on a
+    // remote kernel gateway, and local mode does both locally.
+    let mode = if let Some(gateway_url) = args.gateway.clone() {
+        let token = args
+            .gateway_token
+            .clone()
+            .context("Must specify --gateway-token when using --gateway")?;
+        ExecutionMode::RemoteKernel {
+            gateway_url,
+            token,
+            kernel_id: args.kernel_id.clone(),
+            auth_scheme: args.gateway_auth_scheme.clone(),
+        }
+    } else {
+        common::resolve_execution_mode(args.server.clone(), args.token.clone())?
+    };
 
     // For remote mode, compute the server-relative path once and reuse it
     // for both the Contents API read and the session identifier.
@@ -129,7 +159,9 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
             )
             .await?
         }
-        ExecutionMode::Local => read_notebook(&file_path).context("Failed to read notebook")?,
+        ExecutionMode::Local | ExecutionMode::RemoteKernel { .. } => {
+            read_notebook(&file_path).context("Failed to read notebook")?
+        }
     };
 
     // Determine cell range
@@ -163,6 +195,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         );
     }
 
+    // Get kernel from notebook metadata if not specified
     let notebook_kernel = notebook
         .metadata
         .kernelspec
@@ -170,10 +203,10 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         .map(|ks| ks.name.as_str());
 
     // For remote mode, reuse the pre-computed server-relative path.
-    // For local mode, use absolute path for working directory determination.
+    // For local and remote-kernel modes, use absolute path for working directory determination.
     let notebook_identifier = match &mode {
-        ExecutionMode::Remote { .. } => server_path.unwrap(),
-        ExecutionMode::Local => {
+        ExecutionMode::Remote { .. } => server_path.clone().expect("set for Remote mode"),
+        ExecutionMode::Local | ExecutionMode::RemoteKernel { .. } => {
             let abs =
                 std::fs::canonicalize(&file_path).context("Failed to resolve notebook path")?;
             abs.to_str()
@@ -203,8 +236,10 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     let mut execution_results: HashMap<usize, crate::execution::types::ExecutionResult> =
         HashMap::new();
 
-    let is_streaming = matches!(mode, ExecutionMode::Remote { .. })
-        && matches!(format, OutputFormat::Text | OutputFormat::Markdown);
+    let is_streaming = matches!(
+        mode,
+        ExecutionMode::Remote { .. } | ExecutionMode::RemoteKernel { .. }
+    ) && matches!(format, OutputFormat::Text | OutputFormat::Markdown);
 
     // For streaming remote text mode, print notebook header before execution
     if is_streaming {
@@ -308,7 +343,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
 
     // Persist changes based on mode
     match mode {
-        ExecutionMode::Local => {
+        ExecutionMode::Local | ExecutionMode::RemoteKernel { .. } => {
             // Write notebook to file
             write_notebook_atomic(&file_path, &notebook).context("Failed to write notebook")?;
         }

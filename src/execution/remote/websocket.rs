@@ -32,6 +32,38 @@ impl KernelWebSocket {
         Ok(Self { write, read })
     }
 
+    /// Connect to a kernel via WebSocket with an `Authorization` header.
+    ///
+    /// Used by the kernel-gateway path, which authenticates the WS upgrade
+    /// with e.g. `Authorization: token <gateway-token>`. `auth_value` is the
+    /// full header value (e.g. `"token notebooks"`).
+    pub async fn connect_with_auth(ws_url: &str, auth_value: &str) -> Result<Self> {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+        let mut req = ws_url
+            .into_client_request()
+            .context("Failed to build kernel WebSocket request")?;
+        req.headers_mut().insert(
+            "Authorization",
+            auth_value
+                .parse()
+                .context("Invalid Authorization header value")?,
+        );
+        req.headers_mut().insert(
+            "Sec-WebSocket-Protocol",
+            "v1.kernel.websocket.jupyter.org"
+                .parse()
+                .context("Invalid Sec-WebSocket-Protocol value")?,
+        );
+
+        let (ws_stream, _) = connect_async(req)
+            .await
+            .context("Failed to connect to kernel WebSocket")?;
+
+        let (write, read) = ws_stream.split();
+        Ok(Self { write, read })
+    }
+
     /// Parse Jupyter's binary message format
     fn parse_binary_message(data: &[u8]) -> Option<JupyterMessage> {
         // Read number of buffers (first 8 bytes, little-endian)

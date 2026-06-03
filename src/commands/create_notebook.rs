@@ -106,7 +106,8 @@ pub fn execute(args: CreateArgs) -> Result<()> {
                 .block_on(client.save_notebook(&server_path, &notebook))
                 .context("Failed to create notebook on server")?;
         }
-        crate::execution::types::ExecutionMode::Local => {
+        crate::execution::types::ExecutionMode::Local
+        | crate::execution::types::ExecutionMode::RemoteKernel { .. } => {
             notebook::write_notebook_atomic(&path, &notebook)
                 .context("Failed to write notebook")?;
         }

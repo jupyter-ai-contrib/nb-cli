@@ -123,7 +123,8 @@ pub fn execute(args: SearchArgs) -> Result<()> {
                 &server_path,
             ))?
         }
-        crate::execution::types::ExecutionMode::Local => {
+        crate::execution::types::ExecutionMode::Local
+        | crate::execution::types::ExecutionMode::RemoteKernel { .. } => {
             // Phase 1: Text pre-filter - quick scan of raw file
             let file_content = fs::read_to_string(&file_path)?;
             if !re.is_match(&file_content) {
@@ -201,7 +202,10 @@ fn execute_with_errors(args: &SearchArgs) -> Result<()> {
                 &server_path,
             ))?
         }
-        crate::execution::types::ExecutionMode::Local => notebook::read_notebook(&file_path)?,
+        crate::execution::types::ExecutionMode::Local
+        | crate::execution::types::ExecutionMode::RemoteKernel { .. } => {
+            notebook::read_notebook(&file_path)?
+        }
     };
     let mut results = Vec::new();
 
