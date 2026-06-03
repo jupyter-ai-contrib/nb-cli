@@ -45,10 +45,6 @@ struct SharedServerInfo {
     venv_root: PathBuf,
 }
 
-// SAFETY: All fields are Send + Sync (Strings and PathBufs).
-unsafe impl Send for SharedServerInfo {}
-unsafe impl Sync for SharedServerInfo {}
-
 /// One shared Jupyter Server for the whole test suite.
 /// Initialized on first access; lives until the test process exits.
 static SHARED_SERVER: OnceLock<Option<SharedServerInfo>> = OnceLock::new();
@@ -63,6 +59,33 @@ fn start_shared_server() -> Option<SharedServerInfo> {
     // (test_helpers::setup_execution_venv), since the two backends must
     // never be installed into the same venv.
     let backend = test_helpers::test_backend();
+
+    // If NB_TEST_SERVER_URL/TOKEN are set, use the externally-managed server.
+    if let (Ok(server_url), Ok(token)) = (
+        std::env::var("NB_TEST_SERVER_URL"),
+        std::env::var("NB_TEST_SERVER_TOKEN"),
+    ) {
+        let venv_root = test_helpers::setup_execution_venv()?;
+        let venv_path_env = test_helpers::setup_venv_environment()?;
+        let binary_path = env!("CARGO_BIN_EXE_nb").into();
+        let server_root: PathBuf = std::env::var("NB_TEST_SERVER_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| std::env::temp_dir());
+        if !wait_for_server(&server_url, &token, Duration::from_secs(15)) {
+            eprintln!("⚠️  NB_TEST_SERVER_URL set but server not responding");
+            return None;
+        }
+        return Some(SharedServerInfo {
+            server_url,
+            token,
+            server_root,
+            binary_path,
+            venv_path_env,
+            venv_root,
+        });
+    }
+
+    // Reuse the existing execution venv (ipykernel already installed there).
     let venv_root = test_helpers::setup_execution_venv()?;
     let venv_path_env = test_helpers::setup_venv_environment()?;
 
@@ -101,6 +124,7 @@ fn start_shared_server() -> Option<SharedServerInfo> {
     }
 
     // Verify the `jupyter` binary exists in the venv.
+    // For local dev, run `./tests/setup_test_env.sh` first to install dependencies.
     let jupyter_bin = venv_bin.join("jupyter");
     if !jupyter_bin.exists() {
         eprintln!(
