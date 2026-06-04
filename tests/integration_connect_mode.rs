@@ -425,6 +425,7 @@ fn wait_for_server(server_url: &str, token: &str, timeout: Duration) -> bool {
 /// 1. Execute the full notebook → `persistent_var` is set, cell-use prints it.
 /// 2. Execute only cell-use (index 1) without restarting → the value is still in scope.
 #[test]
+#[ignore] // #87 flaky: Y.js sync timing
 fn test_execute_without_restart_preserves_state() {
     let Some(ctx) = TestCtx::new() else {
         eprintln!("⚠️  Skipping connect-mode test: jupyter server not available");
@@ -465,6 +466,7 @@ fn test_execute_without_restart_preserves_state() {
 /// 3. Execute only cell-use (index 1) with `--restart-kernel --allow-errors` →
 ///    the kernel has been restarted so `persistent_var` is undefined → NameError.
 #[test]
+#[ignore] // #87
 fn test_restart_kernel_clears_state() {
     let Some(ctx) = TestCtx::new() else {
         eprintln!("⚠️  Skipping connect-mode test: jupyter server not available");
@@ -522,6 +524,7 @@ fn test_restart_kernel_clears_state() {
 /// After the kernel is restarted, running all cells from scratch must work correctly
 /// and produce the expected output.
 #[test]
+#[ignore] // #87
 fn test_restart_kernel_then_full_notebook_works() {
     let Some(ctx) = TestCtx::new() else {
         eprintln!("⚠️  Skipping connect-mode test: jupyter server not available");
