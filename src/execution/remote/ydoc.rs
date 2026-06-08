@@ -94,13 +94,15 @@ impl YDocClient {
         }
     }
 
-    /// Get unique file ID for notebook path via FileID API
+    /// Get unique file ID for notebook path via FileID API.
+    /// Tries jupyter-server-documents first, falls back to jupyter-server-fileid.
     async fn get_file_id(server_url: &str, token: &str, notebook_path: &str) -> Result<String> {
-        let url = format!("{}/api/fileid/index", server_url);
-
         let http_client = HttpClient::new();
+
+        // Try jupyter-server-documents: POST /api/fileid/index (create-if-not-exists)
+        let index_url = format!("{}/api/fileid/index", server_url);
         let response = http_client
-            .post(&url)
+            .post(&index_url)
             .query(&[("path", notebook_path)])
             .header("Authorization", format!("token {}", token))
             .send()
@@ -117,24 +119,51 @@ impl YDocClient {
                 }
             })?;
 
-        if !response.status().is_success() {
+        if response.status().is_success() {
+            let file_id_response: FileIdResponse = response
+                .json()
+                .await
+                .context("Failed to parse FileID API response")?;
+            return Ok(file_id_response.id);
+        }
+
+        if response.status().as_u16() != 404 {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
             anyhow::bail!(
-                "FileID API request failed with status {}: {}. \
-                 Make sure jupyter-server-documents is installed: \
-                 pip install jupyter-server-documents",
+                "FileID API request failed with status {}: {}",
                 status,
                 error_text
             );
         }
 
-        let file_id_response: FileIdResponse = response
-            .json()
+        // Fallback: try jupyter-server-fileid: GET /api/fileid/id (lookup only)
+        let id_url = format!("{}/api/fileid/id", server_url);
+        let response = http_client
+            .get(&id_url)
+            .query(&[("path", notebook_path)])
+            .header("Authorization", format!("token {}", token))
+            .send()
             .await
-            .context("Failed to parse FileID API response")?;
+            .map_err(|e| anyhow::anyhow!("Failed to call FileID API: {}", e))?;
 
-        Ok(file_id_response.id)
+        if response.status().is_success() {
+            let file_id_response: FileIdResponse = response
+                .json()
+                .await
+                .context("Failed to parse FileID API response")?;
+            return Ok(file_id_response.id);
+        }
+
+        let status = response.status();
+        let error_text = response.text().await.unwrap_or_default();
+        anyhow::bail!(
+            "FileID API request failed with status {}: {}. \
+             Make sure jupyter-server-documents or jupyter-collaboration is installed: \
+             pip install jupyter-server-documents (or pip install jupyter-collaboration)",
+            status,
+            error_text
+        );
     }
 
     /// Build WebSocket URL for Y.js room
