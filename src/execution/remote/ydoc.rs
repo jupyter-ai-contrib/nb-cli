@@ -157,10 +157,17 @@ impl YDocClient {
 
         let status = response.status();
         let error_text = response.text().await.unwrap_or_default();
+        if status.as_u16() == 404 {
+            anyhow::bail!(
+                "FileID API request failed with status {}: {}. \
+                 Make sure jupyter-server-documents or jupyter-collaboration is installed: \
+                 pip install jupyter-server-documents (or pip install jupyter-collaboration)",
+                status,
+                error_text
+            );
+        }
         anyhow::bail!(
-            "FileID API request failed with status {}: {}. \
-             Make sure jupyter-server-documents or jupyter-collaboration is installed: \
-             pip install jupyter-server-documents (or pip install jupyter-collaboration)",
+            "FileID API request failed with status {}: {}",
             status,
             error_text
         );
