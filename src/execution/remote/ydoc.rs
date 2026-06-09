@@ -50,6 +50,12 @@ struct FileIdResponse {
     id: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct CollabSessionResponse {
+    #[serde(rename = "fileId")]
+    file_id: String,
+}
+
 /// Y.js document client for syncing notebook changes with Jupyter Server
 pub struct YDocClient {
     doc: Doc,
@@ -137,22 +143,23 @@ impl YDocClient {
             );
         }
 
-        // Fallback: try jupyter-server-fileid: GET /api/fileid/id (lookup only)
-        let id_url = format!("{}/api/fileid/id", server_url);
+        // Fallback: try jupyter-collaboration session endpoint (indexes the file if needed)
+        let session_url = format!("{}/api/collaboration/session/{}", server_url, notebook_path);
         let response = http_client
-            .get(&id_url)
-            .query(&[("path", notebook_path)])
+            .put(&session_url)
             .header("Authorization", format!("token {}", token))
+            .header("Content-Type", "application/json")
+            .body(r#"{"format":"json","type":"notebook"}"#)
             .send()
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to call FileID API: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to call collaboration session API: {}", e))?;
 
         if response.status().is_success() {
-            let file_id_response: FileIdResponse = response
+            let session_response: CollabSessionResponse = response
                 .json()
                 .await
-                .context("Failed to parse FileID API response")?;
-            return Ok(file_id_response.id);
+                .context("Failed to parse collaboration session response")?;
+            return Ok(session_response.file_id);
         }
 
         let status = response.status();
@@ -167,7 +174,7 @@ impl YDocClient {
             );
         }
         anyhow::bail!(
-            "FileID API request failed with status {}: {}",
+            "Collaboration session API request failed with status {}: {}",
             status,
             error_text
         );
