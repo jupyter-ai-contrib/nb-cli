@@ -274,6 +274,28 @@ pub fn resolve_ydoc_available(
         .and_then(|c| c.ydoc_available)
 }
 
+pub async fn resolve_ydoc_with_probe(
+    server_url: &str,
+    token: &str,
+    server_arg: &Option<String>,
+    token_arg: &Option<String>,
+) -> bool {
+    let cached = resolve_ydoc_available(server_arg, token_arg);
+    match cached {
+        Some(v) => v,
+        None => {
+            let client = crate::execution::remote::client::JupyterClient::new(
+                server_url.to_string(),
+                token.to_string(),
+            );
+            match client {
+                Ok(c) => c.probe_ydoc().await.unwrap_or(true),
+                Err(_) => true,
+            }
+        }
+    }
+}
+
 /// Get the Jupyter server root directory from saved connection config.
 /// Returns None for manual connections or when no config exists.
 pub fn resolve_server_root() -> Option<String> {

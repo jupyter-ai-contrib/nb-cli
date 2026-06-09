@@ -88,15 +88,23 @@ pub fn execute(args: UpdateCellArgs) -> Result<()> {
 
     match &mode {
         ExecutionMode::Local => execute_file_based(args),
-        ExecutionMode::Remote { .. } => {
-            let ydoc_available = common::resolve_ydoc_available(&args.server, &args.token);
+        ExecutionMode::Remote {
+            ref server_url,
+            ref token,
+        } => {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            if ydoc_available == Some(false) {
-                runtime.block_on(execute_with_contents_api(args, mode))
-            } else {
+            let ydoc = runtime.block_on(common::resolve_ydoc_with_probe(
+                server_url,
+                token,
+                &args.server,
+                &args.token,
+            ));
+            if ydoc {
                 runtime.block_on(execute_with_realtime(args, mode))
+            } else {
+                runtime.block_on(execute_with_contents_api(args, mode))
             }
         }
     }
