@@ -204,6 +204,7 @@ impl RemoteExecutor {
         on_output: Option<&crate::execution::OutputCallback>,
     ) -> Result<ExecutionResult> {
         let ws = self.ws.as_mut().context("WebSocket not connected")?;
+        let deadline = tokio::time::Instant::now() + self.config.timeout;
 
         let msg_id = ws
             .send_execute_request(code, !self.config.allow_errors, cell_id)
@@ -214,9 +215,11 @@ impl RemoteExecutor {
         let mut error_info: Option<ExecutionError> = None;
 
         loop {
-            let msg = match ws.recv_message().await? {
-                Some(msg) => msg,
-                None => break,
+            let msg = match tokio::time::timeout_at(deadline, ws.recv_message()).await {
+                Ok(Ok(Some(msg))) => msg,
+                Ok(Ok(None)) => break,
+                Ok(Err(e)) => return Err(e).context("WebSocket error"),
+                Err(_) => anyhow::bail!("Cell execution timed out after {:?}", self.config.timeout),
             };
 
             let is_ours = msg
