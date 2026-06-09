@@ -394,7 +394,14 @@ impl JupyterClient {
             .await
             .context("Failed to probe FileID API")?;
 
-        Ok(response.status().as_u16() != 404)
+        let status = response.status();
+        if status.as_u16() == 404 {
+            Ok(false)
+        } else if status.is_success() || status.is_redirection() {
+            Ok(true)
+        } else {
+            anyhow::bail!("FileID probe returned unexpected status {}", status)
+        }
     }
 
     /// Get the WebSocket URL for a kernel
