@@ -258,6 +258,22 @@ pub fn resolve_execution_mode(
     }
 }
 
+/// Resolve ydoc_available from saved connection config.
+/// Returns None for ad-hoc --server/--token (caller should try Y.js and fall back).
+/// Returns Some(bool) from saved connection's probe result.
+pub fn resolve_ydoc_available(
+    server_arg: &Option<String>,
+    token_arg: &Option<String>,
+) -> Option<bool> {
+    if server_arg.is_some() && token_arg.is_some() {
+        return None;
+    }
+    Config::load()
+        .ok()
+        .and_then(|c| c.connection)
+        .and_then(|c| c.ydoc_available)
+}
+
 /// Get the Jupyter server root directory from saved connection config.
 /// Returns None for manual connections or when no config exists.
 pub fn resolve_server_root() -> Option<String> {

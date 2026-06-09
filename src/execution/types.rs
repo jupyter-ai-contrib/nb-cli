@@ -44,6 +44,9 @@ pub struct ExecutionConfig {
 
     /// Restart kernel before execution (remote mode only; applies to any cell range)
     pub restart_kernel: bool,
+
+    /// Whether Y.js backend is available (None = unknown, try and fall back)
+    pub ydoc_available: Option<bool>,
 }
 
 impl Default for ExecutionConfig {
@@ -56,6 +59,7 @@ impl Default for ExecutionConfig {
             notebook_path: None,
             env_config: None,
             restart_kernel: false,
+            ydoc_available: None,
         }
     }
 }

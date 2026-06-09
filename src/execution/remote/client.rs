@@ -355,7 +355,6 @@ impl JupyterClient {
     }
 
     /// Save a notebook to the server
-    #[allow(dead_code)]
     pub async fn save_notebook(&self, path: &str, notebook: &nbformat::v4::Notebook) -> Result<()> {
         let url = self.contents_url(path)?;
 
@@ -381,6 +380,21 @@ impl JupyterClient {
         }
 
         Ok(())
+    }
+
+    /// Probe whether the Y.js/collaboration backend (FileID API) is available.
+    /// Returns true if the server has jupyter-collaboration/jupyter-server-documents.
+    pub async fn probe_ydoc(&self) -> Result<bool> {
+        let url = format!("{}/api/fileid/id", self.base_url);
+        let response = self
+            .client
+            .get(&url)
+            .query(&[("token", self.token.as_str()), ("path", "probe")])
+            .send()
+            .await
+            .context("Failed to probe FileID API")?;
+
+        Ok(response.status().as_u16() != 404)
     }
 
     /// Get the WebSocket URL for a kernel

@@ -116,6 +116,12 @@ async fn execute_async(args: ConnectArgs) -> Result<()> {
         select_server_interactive(&valid_servers)?
     };
 
+    // Probe Y.js/collaboration backend availability
+    let ydoc_available = match JupyterClient::new(selected.url.clone(), selected.token.clone()) {
+        Ok(client) => Some(client.probe_ydoc().await.unwrap_or(true)),
+        Err(_) => None,
+    };
+
     // Create connection
     let connection = JupyterConnection {
         server_url: selected.url.clone(),
@@ -132,6 +138,7 @@ async fn execute_async(args: ConnectArgs) -> Result<()> {
             .project_root
             .as_ref()
             .map(|p| p.display().to_string()),
+        ydoc_available,
     };
 
     // Save config
@@ -143,6 +150,11 @@ async fn execute_async(args: ConnectArgs) -> Result<()> {
 
     println!("\n✓ Connected to Jupyter server at {}", selected.url);
     println!("  Working directory: {}", selected.working_dir);
+    if ydoc_available == Some(true) {
+        println!("  Mode: collaborative (Y.js available)");
+    } else {
+        println!("  Mode: direct (no collaboration backend)");
+    }
 
     // Show environment info if using uv or pixi
     match env_config.manager {
@@ -171,16 +183,20 @@ async fn execute_async(args: ConnectArgs) -> Result<()> {
 }
 
 async fn connect_manual(server_url: String, token: String, skip_validation: bool) -> Result<()> {
+    let client = JupyterClient::new(server_url.clone(), token.clone())?;
+
     // Validate connection if requested
     if !skip_validation {
         println!("🔍 Validating connection...");
-        let client = JupyterClient::new(server_url.clone(), token.clone())?;
         client
             .test_connection()
             .await
             .context("Failed to connect to server")?;
         println!("✓ Connection validated");
     }
+
+    // Probe Y.js/collaboration backend
+    let ydoc_available = Some(client.probe_ydoc().await.unwrap_or(true));
 
     // Create connection
     let connection = JupyterConnection {
@@ -195,6 +211,7 @@ async fn connect_manual(server_url: String, token: String, skip_validation: bool
         },
         env_manager: None,
         project_root: None,
+        ydoc_available,
     };
 
     // Save config
@@ -205,6 +222,11 @@ async fn connect_manual(server_url: String, token: String, skip_validation: bool
     let _config_path = config.save()?;
 
     println!("\n✓ Connected to Jupyter server at {}", server_url);
+    if ydoc_available == Some(true) {
+        println!("  Mode: collaborative (Y.js available)");
+    } else {
+        println!("  Mode: direct (no collaboration backend)");
+    }
 
     Ok(())
 }

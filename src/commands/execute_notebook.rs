@@ -215,6 +215,9 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         }
     };
 
+    // Resolve ydoc availability for remote mode
+    let ydoc_available = common::resolve_ydoc_available(&args.server, &args.token);
+
     // Create execution config
     let config = ExecutionConfig {
         mode: mode.clone(),
@@ -224,6 +227,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         notebook_path: Some(notebook_identifier.clone()),
         env_config: env_config.clone(),
         restart_kernel: args.restart_kernel,
+        ydoc_available,
     };
 
     // Create and start backend (reuse kernel for all cells)
@@ -342,14 +346,27 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     }
 
     // Persist changes based on mode
-    match mode {
+    match &mode {
         ExecutionMode::Local | ExecutionMode::RemoteKernel { .. } => {
             // Write notebook to file
             write_notebook_atomic(&file_path, &notebook).context("Failed to write notebook")?;
         }
-        ExecutionMode::Remote { .. } => {
-            // In remote mode, outputs are read from Y.js document during execution.
-            // The server auto-saves to disk via jupyter-server-documents.
+        ExecutionMode::Remote {
+            server_url, token, ..
+        } => {
+            if ydoc_available != Some(true) {
+                let client = crate::execution::remote::client::JupyterClient::new(
+                    server_url.clone(),
+                    token.clone(),
+                )?;
+                let server_root = common::resolve_server_root();
+                let save_path =
+                    common::notebook_path_for_server(&file_path, server_root.as_deref());
+                client
+                    .save_notebook(&save_path, &notebook)
+                    .await
+                    .context("Failed to save notebook to server")?;
+            }
         }
     }
 

@@ -17,6 +17,10 @@ pub struct JupyterConnection {
     /// Project root path for uv/pixi environments
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_root: Option<String>,
+    /// Whether Y.js/collaboration backend is available on the server.
+    /// None means unknown (treated as true for backward compat).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ydoc_available: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
