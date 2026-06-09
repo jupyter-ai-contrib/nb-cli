@@ -75,6 +75,240 @@ impl RemoteExecutor {
             tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
         }
     }
+
+    /// Y.js-based output collection (collaboration server)
+    async fn execute_code_ydoc(
+        &mut self,
+        code: &str,
+        cell_id: Option<&str>,
+        cell_index: Option<usize>,
+        on_output: Option<&crate::execution::OutputCallback>,
+    ) -> Result<ExecutionResult> {
+        let ws = self.ws.as_mut().context("WebSocket not connected")?;
+        let cell_idx = cell_index.context("cell_index required for remote execution")?;
+        let ydoc = self.ydoc.as_mut().context("Y.js client not connected")?;
+        let http = reqwest::Client::new();
+
+        let msg_id = ws
+            .send_execute_request(code, !self.config.allow_errors, cell_id)
+            .await?;
+
+        let mut outputs: Vec<nbformat::v4::Output> = Vec::new();
+        let mut fetched_urls: HashSet<String> = HashSet::new();
+        let mut seen_indices: HashSet<usize> = HashSet::new();
+        let mut idle_received = false;
+        let mut expected_ec: Option<i64> = None;
+        let deadline = tokio::time::Instant::now() + self.config.timeout;
+
+        loop {
+            let cell_data = ydoc.read_cell_outputs(cell_idx).ok();
+            let ec = cell_data.as_ref().and_then(|d| d.execution_count);
+            let ec_ready = expected_ec.is_some() && ec == expected_ec;
+
+            if ec_ready {
+                if let Some(ref cell_data) = cell_data {
+                    for (idx, url_path) in &cell_data.externalized_urls {
+                        if fetched_urls.insert(url_path.clone()) {
+                            seen_indices.insert(*idx);
+                            if let Some(output) =
+                                Self::fetch_output(&http, &self.server_url, &self.token, url_path)
+                                    .await
+                            {
+                                if let Some(cb) = &on_output {
+                                    cb(&output);
+                                }
+                                outputs.push(output);
+                            }
+                        }
+                    }
+                    for (idx, output) in &cell_data.inline_outputs {
+                        if seen_indices.insert(*idx) {
+                            if let Some(cb) = &on_output {
+                                cb(output);
+                            }
+                            outputs.push(output.clone());
+                        }
+                    }
+                }
+
+                if idle_received {
+                    let has_error = outputs
+                        .iter()
+                        .any(|o| matches!(o, nbformat::v4::Output::Error(_)));
+                    let error_info = outputs.iter().find_map(|o| {
+                        if let nbformat::v4::Output::Error(err) = o {
+                            Some(ExecutionError {
+                                ename: err.ename.clone(),
+                                evalue: err.evalue.clone(),
+                                traceback: err.traceback.clone(),
+                            })
+                        } else {
+                            None
+                        }
+                    });
+                    return if has_error {
+                        Ok(ExecutionResult::error(outputs, ec, error_info.unwrap()))
+                    } else {
+                        Ok(ExecutionResult::success(outputs, ec))
+                    };
+                }
+            }
+
+            if idle_received {
+                match tokio::time::timeout_at(deadline, ydoc.recv_update()).await {
+                    Ok(Ok(_)) => {}
+                    Ok(Err(e)) => return Err(e).context("Y.js update error"),
+                    Err(_) => break,
+                }
+            } else {
+                tokio::select! {
+                    kernel_msg = ws.recv_message() => {
+                        if let Some(msg) = kernel_msg? {
+                            let is_ours = msg.parent_header.as_ref()
+                                .map(|h| h.msg_id == msg_id).unwrap_or(false);
+                            if is_ours {
+                                match &msg.content {
+                                    JupyterMessageContent::ExecuteInput(input) => {
+                                        expected_ec = Some(input.execution_count.0 as i64);
+                                    }
+                                    JupyterMessageContent::Status(status) => {
+                                        if matches!(status.execution_state,
+                                            jupyter_protocol::ExecutionState::Idle) {
+                                            idle_received = true;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    ydoc_result = ydoc.recv_update() => {
+                        ydoc_result.context("Y.js update error")?;
+                    }
+                }
+            }
+        }
+
+        let ec = ydoc
+            .read_cell_outputs(cell_idx)
+            .ok()
+            .and_then(|c| c.execution_count);
+        Ok(ExecutionResult::success(outputs, ec))
+    }
+
+    /// Kernel-WS-only output collection (vanilla jupyter_server, no Y.js)
+    async fn execute_code_kernel_ws(
+        &mut self,
+        code: &str,
+        cell_id: Option<&str>,
+        on_output: Option<&crate::execution::OutputCallback>,
+    ) -> Result<ExecutionResult> {
+        let ws = self.ws.as_mut().context("WebSocket not connected")?;
+
+        let msg_id = ws
+            .send_execute_request(code, !self.config.allow_errors, cell_id)
+            .await?;
+
+        let mut outputs: Vec<nbformat::v4::Output> = Vec::new();
+        let mut execution_count: Option<i64> = None;
+        let mut error_info: Option<ExecutionError> = None;
+
+        loop {
+            let msg = match ws.recv_message().await? {
+                Some(msg) => msg,
+                None => break,
+            };
+
+            let is_ours = msg
+                .parent_header
+                .as_ref()
+                .map(|h| h.msg_id == msg_id)
+                .unwrap_or(false);
+
+            if !is_ours {
+                continue;
+            }
+
+            match msg.content {
+                JupyterMessageContent::Status(status)
+                    if matches!(
+                        status.execution_state,
+                        jupyter_protocol::ExecutionState::Idle
+                    ) =>
+                {
+                    break;
+                }
+                JupyterMessageContent::StreamContent(stream) => {
+                    let name = match stream.name {
+                        jupyter_protocol::Stdio::Stdout => "stdout".to_string(),
+                        jupyter_protocol::Stdio::Stderr => "stderr".to_string(),
+                    };
+                    let output = nbformat::v4::Output::Stream {
+                        name,
+                        text: nbformat::v4::MultilineString(stream.text),
+                    };
+                    if let Some(cb) = &on_output {
+                        cb(&output);
+                    }
+                    outputs.push(output);
+                }
+                JupyterMessageContent::ExecuteResult(result) => {
+                    execution_count = Some(result.execution_count.value() as i64);
+                    let json = serde_json::json!({
+                        "output_type": "execute_result",
+                        "execution_count": result.execution_count.value(),
+                        "data": result.data,
+                        "metadata": result.metadata
+                    });
+                    if let Ok(output) = serde_json::from_value::<nbformat::v4::Output>(json) {
+                        if let Some(cb) = &on_output {
+                            cb(&output);
+                        }
+                        outputs.push(output);
+                    }
+                }
+                JupyterMessageContent::DisplayData(display) => {
+                    let json = serde_json::json!({
+                        "output_type": "display_data",
+                        "data": display.data,
+                        "metadata": display.metadata
+                    });
+                    if let Ok(output) = serde_json::from_value::<nbformat::v4::Output>(json) {
+                        if let Some(cb) = &on_output {
+                            cb(&output);
+                        }
+                        outputs.push(output);
+                    }
+                }
+                JupyterMessageContent::ErrorOutput(error) => {
+                    error_info = Some(ExecutionError {
+                        ename: error.ename.clone(),
+                        evalue: error.evalue.clone(),
+                        traceback: error.traceback.clone(),
+                    });
+                    let output = nbformat::v4::Output::Error(nbformat::v4::ErrorOutput {
+                        ename: error.ename,
+                        evalue: error.evalue,
+                        traceback: error.traceback,
+                    });
+                    if let Some(cb) = &on_output {
+                        cb(&output);
+                    }
+                    outputs.push(output);
+                }
+                JupyterMessageContent::ExecuteInput(input) => {
+                    execution_count = Some(input.execution_count.0 as i64);
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(error) = error_info {
+            Ok(ExecutionResult::error(outputs, execution_count, error))
+        } else {
+            Ok(ExecutionResult::success(outputs, execution_count))
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -153,16 +387,30 @@ impl ExecutionBackend for RemoteExecutor {
         self.session = Some(session);
         self.ws = Some(ws);
 
-        // Connect Y.js client for observing outputs during execution
-        if let Some(ref notebook_path) = self.config.notebook_path {
-            let ydoc = YDocClient::connect(
-                self.server_url.clone(),
-                self.token.clone(),
-                notebook_path.clone(),
-            )
-            .await
-            .context("Failed to connect Y.js client for output observation")?;
-            self.ydoc = Some(ydoc);
+        // Connect Y.js client for observing outputs during execution (skip for vanilla servers)
+        let skip_ydoc = self.config.ydoc_available == Some(false);
+        if !skip_ydoc {
+            if let Some(ref notebook_path) = self.config.notebook_path {
+                match YDocClient::connect(
+                    self.server_url.clone(),
+                    self.token.clone(),
+                    notebook_path.clone(),
+                )
+                .await
+                {
+                    Ok(ydoc) => {
+                        self.ydoc = Some(ydoc);
+                    }
+                    Err(e) => {
+                        if self.config.ydoc_available.is_none() {
+                            eprintln!("Y.js not available, using direct kernel output: {}", e);
+                        } else {
+                            return Err(e)
+                                .context("Failed to connect Y.js client for output observation");
+                        }
+                    }
+                }
+            }
         }
 
         Ok(())
@@ -175,121 +423,12 @@ impl ExecutionBackend for RemoteExecutor {
         cell_index: Option<usize>,
         on_output: Option<&crate::execution::OutputCallback>,
     ) -> Result<ExecutionResult> {
-        let ws = self.ws.as_mut().context("WebSocket not connected")?;
-        let cell_idx = cell_index.context("cell_index required for remote execution")?;
-        let ydoc = self.ydoc.as_mut().context("Y.js client not connected")?;
-        let http = reqwest::Client::new();
-
-        // 1. Fire execute request
-        let msg_id = ws
-            .send_execute_request(code, !self.config.allow_errors, cell_id)
-            .await?;
-
-        // 2. Watch for changes on the ydoc for this cell
-        let mut outputs: Vec<nbformat::v4::Output> = Vec::new();
-        let mut fetched_urls: HashSet<String> = HashSet::new();
-        let mut seen_indices: HashSet<usize> = HashSet::new();
-        let mut idle_received = false;
-        let mut expected_ec: Option<i64> = None;
-        let deadline = tokio::time::Instant::now() + self.config.timeout;
-
-        loop {
-            // 3. Check ydoc state before blocking — the update may already
-            //    have been applied in a previous iteration.
-            let cell_data = ydoc.read_cell_outputs(cell_idx).ok();
-            let ec = cell_data.as_ref().and_then(|d| d.execution_count);
-            let ec_ready = expected_ec.is_some() && ec == expected_ec;
-
-            if ec_ready {
-                if let Some(ref cell_data) = cell_data {
-                    for (idx, url_path) in &cell_data.externalized_urls {
-                        if fetched_urls.insert(url_path.clone()) {
-                            seen_indices.insert(*idx);
-                            if let Some(output) =
-                                Self::fetch_output(&http, &self.server_url, &self.token, url_path)
-                                    .await
-                            {
-                                if let Some(cb) = &on_output {
-                                    cb(&output);
-                                }
-                                outputs.push(output);
-                            }
-                        }
-                    }
-                    for (idx, output) in &cell_data.inline_outputs {
-                        if seen_indices.insert(*idx) {
-                            if let Some(cb) = &on_output {
-                                cb(output);
-                            }
-                            outputs.push(output.clone());
-                        }
-                    }
-                }
-
-                if idle_received {
-                    let has_error = outputs
-                        .iter()
-                        .any(|o| matches!(o, nbformat::v4::Output::Error(_)));
-                    let error_info = outputs.iter().find_map(|o| {
-                        if let nbformat::v4::Output::Error(err) = o {
-                            Some(ExecutionError {
-                                ename: err.ename.clone(),
-                                evalue: err.evalue.clone(),
-                                traceback: err.traceback.clone(),
-                            })
-                        } else {
-                            None
-                        }
-                    });
-                    return if has_error {
-                        Ok(ExecutionResult::error(outputs, ec, error_info.unwrap()))
-                    } else {
-                        Ok(ExecutionResult::success(outputs, ec))
-                    };
-                }
-            }
-
-            // 4. Wait for new messages
-            if idle_received {
-                match tokio::time::timeout_at(deadline, ydoc.recv_update()).await {
-                    Ok(Ok(_)) => {}
-                    Ok(Err(e)) => return Err(e).context("Y.js update error"),
-                    Err(_) => break,
-                }
-            } else {
-                tokio::select! {
-                    kernel_msg = ws.recv_message() => {
-                        if let Some(msg) = kernel_msg? {
-                            let is_ours = msg.parent_header.as_ref()
-                                .map(|h| h.msg_id == msg_id).unwrap_or(false);
-                            if is_ours {
-                                match &msg.content {
-                                    JupyterMessageContent::ExecuteInput(input) => {
-                                        expected_ec = Some(input.execution_count.0 as i64);
-                                    }
-                                    JupyterMessageContent::Status(status) => {
-                                        if matches!(status.execution_state,
-                                            jupyter_protocol::ExecutionState::Idle) {
-                                            idle_received = true;
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                    }
-                    ydoc_result = ydoc.recv_update() => {
-                        ydoc_result.context("Y.js update error")?;
-                    }
-                }
-            }
+        if self.ydoc.is_some() {
+            self.execute_code_ydoc(code, cell_id, cell_index, on_output)
+                .await
+        } else {
+            self.execute_code_kernel_ws(code, cell_id, on_output).await
         }
-
-        let ec = ydoc
-            .read_cell_outputs(cell_idx)
-            .ok()
-            .and_then(|c| c.execution_count);
-        Ok(ExecutionResult::success(outputs, ec))
     }
 
     async fn stop(&mut self) -> Result<()> {
