@@ -54,6 +54,8 @@ struct FileIdResponse {
 struct CollabSessionResponse {
     #[serde(rename = "fileId")]
     file_id: String,
+    #[serde(rename = "sessionId")]
+    session_id: String,
 }
 
 /// Y.js document client for syncing notebook changes with Jupyter Server
@@ -69,11 +71,11 @@ pub struct YDocClient {
 impl YDocClient {
     /// Connect to Y.js room for the given notebook
     pub async fn connect(server_url: String, token: String, notebook_path: String) -> Result<Self> {
-        // Step 1: Get file ID from FileID API
-        let file_id = Self::get_file_id(&server_url, &token, &notebook_path).await?;
+        // Step 1: Get file ID (and session ID if using jupyter-collaboration)
+        let (file_id, session_id) = Self::get_file_id(&server_url, &token, &notebook_path).await?;
 
         // Step 2: Connect to room WebSocket
-        let ws_url = Self::build_room_ws_url(&server_url, &file_id, &token)?;
+        let ws_url = Self::build_room_ws_url(&server_url, &file_id, &token, session_id.as_deref())?;
 
         let (ws_stream, _) = connect_async(&ws_url)
             .await
@@ -100,9 +102,11 @@ impl YDocClient {
         }
     }
 
-    /// Get unique file ID for notebook path via FileID API.
-    /// Tries jupyter-server-documents first, falls back to jupyter-collaboration session endpoint.
-    async fn get_file_id(server_url: &str, token: &str, notebook_path: &str) -> Result<String> {
+    async fn get_file_id(
+        server_url: &str,
+        token: &str,
+        notebook_path: &str,
+    ) -> Result<(String, Option<String>)> {
         let http_client = HttpClient::new();
 
         // Try jupyter-server-documents: POST /api/fileid/index (create-if-not-exists)
@@ -130,7 +134,7 @@ impl YDocClient {
                 .json()
                 .await
                 .context("Failed to parse FileID API response")?;
-            return Ok(file_id_response.id);
+            return Ok((file_id_response.id, None));
         }
 
         if response.status().as_u16() != 404 {
@@ -160,7 +164,7 @@ impl YDocClient {
                 .json()
                 .await
                 .context("Failed to parse collaboration session response")?;
-            return Ok(session_response.file_id);
+            return Ok((session_response.file_id, Some(session_response.session_id)));
         }
 
         let status = response.status();
@@ -181,8 +185,12 @@ impl YDocClient {
         );
     }
 
-    /// Build WebSocket URL for Y.js room
-    fn build_room_ws_url(server_url: &str, file_id: &str, token: &str) -> Result<String> {
+    fn build_room_ws_url(
+        server_url: &str,
+        file_id: &str,
+        token: &str,
+        session_id: Option<&str>,
+    ) -> Result<String> {
         // Parse base URL to extract host and port
         let base_url = Url::parse(server_url).context("Invalid server URL")?;
 
@@ -203,10 +211,15 @@ impl YDocClient {
             "ws"
         };
 
-        let ws_url = format!(
+        let mut ws_url = format!(
             "{}://{}:{}/api/collaboration/room/json:notebook:{}?token={}",
             ws_scheme, host, port, file_id, token
         );
+
+        if let Some(sid) = session_id {
+            ws_url.push_str("&sessionId=");
+            ws_url.push_str(sid);
+        }
 
         Ok(ws_url)
     }
