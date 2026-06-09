@@ -83,22 +83,23 @@ pub fn execute(args: UpdateCellArgs) -> Result<()> {
         bail!("Must specify --cell or --cell-index");
     }
 
-    // Check if we should use real-time Y.js updates by resolving execution mode
     use crate::execution::types::ExecutionMode;
     let mode = common::resolve_execution_mode(args.server.clone(), args.token.clone())?;
-    let use_realtime = matches!(mode, ExecutionMode::Remote { .. });
 
-    if use_realtime {
-        // Create Tokio runtime for async operations
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-
-        return runtime.block_on(execute_with_realtime(args, mode));
+    match &mode {
+        ExecutionMode::Local => execute_file_based(args),
+        ExecutionMode::Remote { .. } => {
+            let ydoc_available = common::resolve_ydoc_available(&args.server, &args.token);
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            if ydoc_available == Some(false) {
+                runtime.block_on(execute_with_contents_api(args, mode))
+            } else {
+                runtime.block_on(execute_with_realtime(args, mode))
+            }
+        }
     }
-
-    // Fallback to file-based updates
-    execute_file_based(args)
 }
 
 async fn execute_with_realtime(
@@ -170,6 +171,166 @@ async fn execute_with_realtime(
     // Output result
     let result = UpdateCellResult {
         file: file_path.clone(),
+        cell_id,
+        index,
+        updated: updates,
+    };
+
+    let format = if args.json {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Text
+    };
+    output_result(&result, &format)?;
+
+    Ok(())
+}
+
+async fn execute_with_contents_api(
+    args: UpdateCellArgs,
+    mode: crate::execution::types::ExecutionMode,
+) -> Result<()> {
+    use nbformat::v4::Cell;
+
+    let (server_url, token) = match &mode {
+        crate::execution::types::ExecutionMode::Remote { server_url, token } => {
+            (server_url.clone(), token.clone())
+        }
+        _ => bail!("Expected remote execution mode"),
+    };
+
+    let file_path = common::normalize_notebook_path(&args.file);
+    let server_root = common::resolve_server_root();
+    let notebook_server_path = common::notebook_path_for_server(&file_path, server_root.as_deref());
+
+    let client = crate::execution::remote::client::JupyterClient::new(
+        server_url.clone(),
+        token.clone(),
+    )?;
+    let mut notebook = client
+        .get_notebook(&notebook_server_path)
+        .await
+        .context("Failed to read notebook from server")?;
+
+    let (index, cell_id) = if let Some(ref id) = args.cell {
+        let (idx, cell) = common::find_cell_by_id(&notebook.cells, id)?;
+        (idx, cell.id().to_string())
+    } else if let Some(cell_index) = args.cell_index {
+        let idx = common::normalize_index(cell_index, notebook.cells.len())?;
+        let id = notebook.cells[idx].id().to_string();
+        (idx, id)
+    } else {
+        unreachable!("Already validated cell selector");
+    };
+
+    let mut updates = Vec::new();
+    let cell = &mut notebook.cells[index];
+
+    if let Some(ref source_text) = args.source {
+        let new_source = common::parse_source(source_text)?;
+        match cell {
+            Cell::Code {
+                source,
+                execution_count,
+                ..
+            } => {
+                *source = new_source;
+                *execution_count = None;
+                updates.push("source replaced".to_string());
+            }
+            Cell::Markdown { source, .. } => {
+                *source = new_source;
+                updates.push("source replaced".to_string());
+            }
+            Cell::Raw { source, .. } => {
+                *source = new_source;
+                updates.push("source replaced".to_string());
+            }
+        }
+    }
+
+    if let Some(ref append_text) = args.append {
+        let append_source = common::parse_source(append_text)?;
+        match cell {
+            Cell::Code {
+                source,
+                execution_count,
+                ..
+            } => {
+                source.extend(append_source);
+                *execution_count = None;
+                updates.push("source appended".to_string());
+            }
+            Cell::Markdown { source, .. } => {
+                source.extend(append_source);
+                updates.push("source appended".to_string());
+            }
+            Cell::Raw { source, .. } => {
+                source.extend(append_source);
+                updates.push("source appended".to_string());
+            }
+        }
+    }
+
+    if let Some(new_type) = args.cell_type {
+        let old_cell = notebook.cells.remove(index);
+        let (old_id, old_metadata, old_source) = match old_cell {
+            Cell::Code {
+                id,
+                metadata,
+                source,
+                ..
+            } => (id, metadata, source),
+            Cell::Markdown {
+                id,
+                metadata,
+                source,
+                ..
+            } => (id, metadata, source),
+            Cell::Raw {
+                id,
+                metadata,
+                source,
+            } => (id, metadata, source),
+        };
+
+        let new_cell = match new_type {
+            CellType::Code => Cell::Code {
+                id: old_id,
+                metadata: old_metadata,
+                execution_count: None,
+                source: old_source,
+                outputs: vec![],
+            },
+            CellType::Markdown => Cell::Markdown {
+                id: old_id,
+                metadata: old_metadata,
+                source: old_source,
+                attachments: None,
+            },
+            CellType::Raw => Cell::Raw {
+                id: old_id,
+                metadata: old_metadata,
+                source: old_source,
+            },
+        };
+
+        notebook.cells.insert(index, new_cell);
+        let type_name = match new_type {
+            CellType::Code => "code",
+            CellType::Markdown => "markdown",
+            CellType::Raw => "raw",
+        };
+        updates.push(format!("type changed to {}", type_name));
+    }
+
+    client
+        .save_notebook(&notebook_server_path, &notebook)
+        .await
+        .context("Failed to save notebook to server")?;
+
+    let result = UpdateCellResult {
+        file: file_path,
         cell_id,
         index,
         updated: updates,

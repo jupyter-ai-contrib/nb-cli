@@ -57,14 +57,20 @@ pub fn execute(args: ClearOutputsArgs) -> Result<()> {
     use crate::execution::types::ExecutionMode;
     let mode = common::resolve_execution_mode(args.server.clone(), args.token.clone())?;
 
-    if matches!(mode, ExecutionMode::Remote { .. }) {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        return runtime.block_on(execute_with_realtime(args, mode));
+    match &mode {
+        ExecutionMode::Local => execute_file_based(args),
+        ExecutionMode::Remote { .. } => {
+            let ydoc_available = common::resolve_ydoc_available(&args.server, &args.token);
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            if ydoc_available == Some(false) {
+                runtime.block_on(execute_with_contents_api(args, mode))
+            } else {
+                runtime.block_on(execute_with_realtime(args, mode))
+            }
+        }
     }
-
-    execute_file_based(args)
 }
 
 async fn execute_with_realtime(
@@ -101,6 +107,70 @@ async fn execute_with_realtime(
         file: file_path,
         cells_cleared,
         execution_counts_cleared: true,
+    };
+
+    let format = if args.json {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Text
+    };
+    output_result(&result, &format)?;
+
+    Ok(())
+}
+
+async fn execute_with_contents_api(
+    args: ClearOutputsArgs,
+    mode: crate::execution::types::ExecutionMode,
+) -> Result<()> {
+    let (server_url, token) = match &mode {
+        crate::execution::types::ExecutionMode::Remote { server_url, token } => {
+            (server_url.clone(), token.clone())
+        }
+        _ => bail!("Expected remote execution mode"),
+    };
+
+    let file_path = common::normalize_notebook_path(&args.file);
+    let server_root = common::resolve_server_root();
+    let notebook_server_path = common::notebook_path_for_server(&file_path, server_root.as_deref());
+
+    let client = crate::execution::remote::client::JupyterClient::new(
+        server_url.clone(),
+        token.clone(),
+    )?;
+    let mut notebook = client
+        .get_notebook(&notebook_server_path)
+        .await
+        .context("Failed to read notebook from server")?;
+
+    let cells_cleared = if let Some(ref cell_id) = args.cell {
+        let (_, cell) = common::find_cell_by_id_mut(&mut notebook.cells, cell_id)?;
+        clear_cell_output(cell, args.keep_execution_count)?;
+        1
+    } else if let Some(cell_index) = args.cell_index {
+        let index = common::normalize_index(cell_index, notebook.cells.len())?;
+        clear_cell_output(&mut notebook.cells[index], args.keep_execution_count)?;
+        1
+    } else {
+        let mut count = 0;
+        for cell in &mut notebook.cells {
+            if let Cell::Code { .. } = cell {
+                clear_cell_output(cell, args.keep_execution_count)?;
+                count += 1;
+            }
+        }
+        count
+    };
+
+    client
+        .save_notebook(&notebook_server_path, &notebook)
+        .await
+        .context("Failed to save notebook to server")?;
+
+    let result = ClearOutputsResult {
+        file: file_path,
+        cells_cleared,
+        execution_counts_cleared: !args.keep_execution_count,
     };
 
     let format = if args.json {

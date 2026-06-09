@@ -221,22 +221,23 @@ fn parse_source_into_cells(text: &str, default_type: &CellType) -> Vec<ParsedCel
 }
 
 pub fn execute(args: AddCellArgs) -> Result<()> {
-    // Check if we should use real-time Y.js updates by resolving execution mode
     use crate::execution::types::ExecutionMode;
     let mode = common::resolve_execution_mode(args.server.clone(), args.token.clone())?;
-    let use_realtime = matches!(mode, ExecutionMode::Remote { .. });
 
-    if use_realtime {
-        // Create Tokio runtime for async operations
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-
-        return runtime.block_on(execute_with_realtime(args, mode));
+    match &mode {
+        ExecutionMode::Local => execute_file_based(args),
+        ExecutionMode::Remote { .. } => {
+            let ydoc_available = common::resolve_ydoc_available(&args.server, &args.token);
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            if ydoc_available == Some(false) {
+                runtime.block_on(execute_with_contents_api(args, mode))
+            } else {
+                runtime.block_on(execute_with_realtime(args, mode))
+            }
+        }
     }
-
-    // Fallback to file-based updates
-    execute_file_based(args)
 }
 
 async fn execute_with_realtime(
@@ -356,6 +357,111 @@ async fn execute_with_realtime(
         notebook.cells.len() + num_added,
         &format,
     )?;
+
+    Ok(())
+}
+
+async fn execute_with_contents_api(
+    args: AddCellArgs,
+    mode: crate::execution::types::ExecutionMode,
+) -> Result<()> {
+    let (server_url, token) = match &mode {
+        crate::execution::types::ExecutionMode::Remote { server_url, token } => {
+            (server_url.clone(), token.clone())
+        }
+        _ => bail!("Expected remote execution mode"),
+    };
+
+    let file_path = common::normalize_notebook_path(&args.file);
+    let server_root = common::resolve_server_root();
+    let notebook_server_path = common::notebook_path_for_server(&file_path, server_root.as_deref());
+
+    let client = crate::execution::remote::client::JupyterClient::new(
+        server_url.clone(),
+        token.clone(),
+    )?;
+    let mut notebook = client
+        .get_notebook(&notebook_server_path)
+        .await
+        .context("Failed to read notebook from server")?;
+
+    let raw_text = common::parse_source_text(&args.source)?;
+    let parsed_cells = parse_source_into_cells(&raw_text, &args.cell_type);
+
+    if parsed_cells.len() > 1 && args.id.is_some() {
+        bail!("--id cannot be used when adding multiple cells");
+    }
+
+    let insert_index = if let Some(idx) = args.insert_at {
+        if idx < 0 {
+            let abs_idx = idx.unsigned_abs() as usize;
+            if abs_idx > notebook.cells.len() {
+                bail!(
+                    "Negative index {} out of range (notebook has {} cells)",
+                    idx,
+                    notebook.cells.len()
+                );
+            }
+            notebook.cells.len() - abs_idx
+        } else {
+            let pos_idx = idx as usize;
+            if pos_idx > notebook.cells.len() {
+                bail!(
+                    "Index {} out of range (notebook has {} cells)",
+                    idx,
+                    notebook.cells.len()
+                );
+            }
+            pos_idx
+        }
+    } else if let Some(ref after_id) = args.after {
+        let (index, _) = common::find_cell_by_id(&notebook.cells, after_id)?;
+        index + 1
+    } else if let Some(ref before_id) = args.before {
+        let (index, _) = common::find_cell_by_id(&notebook.cells, before_id)?;
+        index
+    } else {
+        notebook.cells.len()
+    };
+
+    let mut added_cells: Vec<AddedCellInfo> = Vec::new();
+
+    for (i, parsed) in parsed_cells.into_iter().enumerate() {
+        let cell_id = if let Some(ref id) = args.id {
+            if notebook.cells.iter().any(|c| c.id().as_str() == *id) {
+                bail!("Cell ID '{}' already exists in notebook", id);
+            }
+            CellId::new(id).map_err(|e| anyhow::anyhow!("Invalid cell ID: {}", e))?
+        } else {
+            CellId::from(Uuid::new_v4())
+        };
+
+        let cell_type_str = cell_type_to_str(&parsed.cell_type);
+        let metadata = parsed.metadata.unwrap_or_else(create_empty_metadata);
+        let new_cell = create_cell(parsed.cell_type, cell_id.clone(), metadata, parsed.source);
+
+        let actual_index = insert_index + i;
+        notebook.cells.insert(actual_index, new_cell);
+
+        added_cells.push(AddedCellInfo {
+            cell_type: cell_type_str.to_string(),
+            cell_id: cell_id.to_string(),
+            index: actual_index,
+        });
+    }
+
+    client
+        .save_notebook(&notebook_server_path, &notebook)
+        .await
+        .context("Failed to save notebook to server")?;
+
+    let format = if args.json {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Text
+    };
+
+    output_results(&file_path, added_cells, notebook.cells.len(), &format)?;
 
     Ok(())
 }
