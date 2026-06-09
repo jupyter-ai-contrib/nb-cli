@@ -101,7 +101,7 @@ impl YDocClient {
     }
 
     /// Get unique file ID for notebook path via FileID API.
-    /// Tries jupyter-server-documents first, falls back to jupyter-server-fileid.
+    /// Tries jupyter-server-documents first, falls back to jupyter-collaboration session endpoint.
     async fn get_file_id(server_url: &str, token: &str, notebook_path: &str) -> Result<String> {
         let http_client = HttpClient::new();
 
@@ -144,9 +144,10 @@ impl YDocClient {
         }
 
         // Fallback: try jupyter-collaboration session endpoint (indexes the file if needed)
-        let session_url = format!("{}/api/collaboration/session/{}", server_url, notebook_path);
+        let mut session_url = Url::parse(server_url).context("Invalid server URL")?;
+        session_url.set_path(&format!("/api/collaboration/session/{}", notebook_path));
         let response = http_client
-            .put(&session_url)
+            .put(session_url)
             .header("Authorization", format!("token {}", token))
             .header("Content-Type", "application/json")
             .body(r#"{"format":"json","type":"notebook"}"#)
