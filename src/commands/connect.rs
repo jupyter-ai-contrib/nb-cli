@@ -118,7 +118,7 @@ async fn execute_async(args: ConnectArgs) -> Result<()> {
 
     // Probe Y.js/collaboration backend availability
     let ydoc_available = match JupyterClient::new(selected.url.clone(), selected.token.clone()) {
-        Ok(client) => Some(client.probe_ydoc().await.unwrap_or(true)),
+        Ok(client) => Some(client.probe_ydoc().await.unwrap_or(false)),
         Err(_) => None,
     };
 
@@ -150,10 +150,10 @@ async fn execute_async(args: ConnectArgs) -> Result<()> {
 
     println!("\n✓ Connected to Jupyter server at {}", selected.url);
     println!("  Working directory: {}", selected.working_dir);
-    if ydoc_available == Some(true) {
-        println!("  Mode: collaborative (Y.js available)");
-    } else {
-        println!("  Mode: direct (no collaboration backend)");
+    match ydoc_available {
+        Some(true) => println!("  Mode: collaborative (Y.js available)"),
+        Some(false) => println!("  Mode: direct (no collaboration backend)"),
+        None => {}
     }
 
     // Show environment info if using uv or pixi
@@ -195,8 +195,12 @@ async fn connect_manual(server_url: String, token: String, skip_validation: bool
         println!("✓ Connection validated");
     }
 
-    // Probe Y.js/collaboration backend
-    let ydoc_available = Some(client.probe_ydoc().await.unwrap_or(true));
+    // Probe Y.js/collaboration backend (skip if validation is skipped)
+    let ydoc_available = if skip_validation {
+        None
+    } else {
+        Some(client.probe_ydoc().await.unwrap_or(false))
+    };
 
     // Create connection
     let connection = JupyterConnection {
@@ -222,10 +226,10 @@ async fn connect_manual(server_url: String, token: String, skip_validation: bool
     let _config_path = config.save()?;
 
     println!("\n✓ Connected to Jupyter server at {}", server_url);
-    if ydoc_available == Some(true) {
-        println!("  Mode: collaborative (Y.js available)");
-    } else {
-        println!("  Mode: direct (no collaboration backend)");
+    match ydoc_available {
+        Some(true) => println!("  Mode: collaborative (Y.js available)"),
+        Some(false) => println!("  Mode: direct (no collaboration backend)"),
+        None => {}
     }
 
     Ok(())

@@ -289,8 +289,8 @@ pub async fn resolve_ydoc_with_probe(
                 token.to_string(),
             );
             match client {
-                Ok(c) => c.probe_ydoc().await.unwrap_or(true),
-                Err(_) => true,
+                Ok(c) => c.probe_ydoc().await.unwrap_or(false),
+                Err(_) => false,
             }
         }
     }
