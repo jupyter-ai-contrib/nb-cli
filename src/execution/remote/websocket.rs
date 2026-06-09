@@ -3,7 +3,11 @@
 use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use jupyter_protocol::messaging::{JupyterMessage, JupyterMessageContent};
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::tungstenite::{
+    client::IntoClientRequest,
+    http::header::{HeaderValue, SEC_WEBSOCKET_PROTOCOL},
+    Message,
+};
 
 /// WebSocket connection to a Jupyter kernel
 pub struct KernelWebSocket {
@@ -23,7 +27,14 @@ pub struct KernelWebSocket {
 impl KernelWebSocket {
     /// Connect to a kernel via WebSocket
     pub async fn connect(ws_url: &str) -> Result<Self> {
-        let (ws_stream, _) = connect_async(ws_url)
+        let mut request = ws_url
+            .into_client_request()
+            .context("Invalid WebSocket URL")?;
+        request.headers_mut().insert(
+            SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static("v1.kernel.websocket.jupyter.org"),
+        );
+        let (ws_stream, _) = tokio_tungstenite::connect_async(request)
             .await
             .context("Failed to connect to kernel WebSocket")?;
 
