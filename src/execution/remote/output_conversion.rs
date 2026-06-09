@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use yrs::{Any, Array, ArrayPrelim, ArrayRef, Map, MapPrelim, TransactionMut};
 
 /// Convert an nbformat Output to a MapPrelim that can be inserted into the outputs array
-#[allow(dead_code)]
 pub fn output_to_map_prelim(output: &Output) -> MapPrelim {
     match output {
         Output::Stream { name, text } => MapPrelim::from([
@@ -92,7 +91,6 @@ fn json_to_any(value: &JsonValue) -> Any {
 }
 
 /// Update a cell's outputs in the Y.js document
-#[allow(dead_code)]
 pub fn update_cell_outputs(
     txn: &mut TransactionMut,
     cells_array: &ArrayRef,
@@ -136,7 +134,6 @@ pub fn update_cell_outputs(
 }
 
 /// Update a cell's execution_count in the Y.js document
-#[allow(dead_code)]
 pub fn update_cell_execution_count(
     txn: &mut TransactionMut,
     cells_array: &ArrayRef,

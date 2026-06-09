@@ -179,6 +179,7 @@ impl ExecutionBackend for RemoteExecutor {
         let cell_idx = cell_index.context("cell_index required for remote execution")?;
         let ydoc = self.ydoc.as_mut().context("Y.js client not connected")?;
         let http = reqwest::Client::new();
+        let client_writes = !ydoc.server_writes_outputs();
 
         // 1. Fire execute request
         let msg_id = ws
@@ -187,6 +188,7 @@ impl ExecutionBackend for RemoteExecutor {
 
         // 2. Watch for changes on the ydoc for this cell
         let mut outputs: Vec<nbformat::v4::Output> = Vec::new();
+        let mut kernel_outputs: Vec<nbformat::v4::Output> = Vec::new();
         let mut fetched_urls: HashSet<String> = HashSet::new();
         let mut seen_indices: HashSet<usize> = HashSet::new();
         let mut idle_received = false;
@@ -227,26 +229,18 @@ impl ExecutionBackend for RemoteExecutor {
                 }
 
                 if idle_received {
-                    let has_error = outputs
-                        .iter()
-                        .any(|o| matches!(o, nbformat::v4::Output::Error(_)));
-                    let error_info = outputs.iter().find_map(|o| {
-                        if let nbformat::v4::Output::Error(err) = o {
-                            Some(ExecutionError {
-                                ename: err.ename.clone(),
-                                evalue: err.evalue.clone(),
-                                traceback: err.traceback.clone(),
-                            })
-                        } else {
-                            None
-                        }
-                    });
-                    return if has_error {
-                        Ok(ExecutionResult::error(outputs, ec, error_info.unwrap()))
-                    } else {
-                        Ok(ExecutionResult::success(outputs, ec))
-                    };
+                    return Self::build_result(outputs, ec);
                 }
+            }
+
+            // When the server doesn't write outputs and kernel is done,
+            // write collected outputs to Y.js ourselves, sync, then let
+            // the read loop above pick them up on the next iteration.
+            if client_writes && idle_received && !ec_ready && !kernel_outputs.is_empty() {
+                ydoc.update_cell_outputs(cell_idx, kernel_outputs.clone())?;
+                ydoc.update_cell_execution_count(cell_idx, expected_ec)?;
+                ydoc.sync().await?;
+                continue;
             }
 
             // 4. Wait for new messages
@@ -273,7 +267,13 @@ impl ExecutionBackend for RemoteExecutor {
                                             idle_received = true;
                                         }
                                     }
-                                    _ => {}
+                                    _ => {
+                                        if client_writes {
+                                            if let Some(output) = Self::kernel_msg_to_output(&msg.content) {
+                                                kernel_outputs.push(output);
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -283,6 +283,11 @@ impl ExecutionBackend for RemoteExecutor {
                     }
                 }
             }
+        }
+
+        // Fallback: if we collected kernel outputs but never wrote them
+        if client_writes && !kernel_outputs.is_empty() {
+            return Self::build_result(kernel_outputs, expected_ec);
         }
 
         let ec = ydoc
@@ -308,5 +313,72 @@ impl ExecutionBackend for RemoteExecutor {
         // stay alive across multiple cell executions.
 
         Ok(())
+    }
+}
+
+impl RemoteExecutor {
+    fn build_result(
+        outputs: Vec<nbformat::v4::Output>,
+        ec: Option<i64>,
+    ) -> Result<ExecutionResult> {
+        let has_error = outputs
+            .iter()
+            .any(|o| matches!(o, nbformat::v4::Output::Error(_)));
+        let error_info = outputs.iter().find_map(|o| {
+            if let nbformat::v4::Output::Error(err) = o {
+                Some(ExecutionError {
+                    ename: err.ename.clone(),
+                    evalue: err.evalue.clone(),
+                    traceback: err.traceback.clone(),
+                })
+            } else {
+                None
+            }
+        });
+        if has_error {
+            Ok(ExecutionResult::error(outputs, ec, error_info.unwrap()))
+        } else {
+            Ok(ExecutionResult::success(outputs, ec))
+        }
+    }
+
+    fn kernel_msg_to_output(content: &JupyterMessageContent) -> Option<nbformat::v4::Output> {
+        match content {
+            JupyterMessageContent::StreamContent(stream) => {
+                let name = match stream.name {
+                    jupyter_protocol::Stdio::Stdout => "stdout".to_string(),
+                    jupyter_protocol::Stdio::Stderr => "stderr".to_string(),
+                };
+                Some(nbformat::v4::Output::Stream {
+                    name,
+                    text: nbformat::v4::MultilineString(stream.text.clone()),
+                })
+            }
+            JupyterMessageContent::ExecuteResult(result) => {
+                let json = serde_json::json!({
+                    "output_type": "execute_result",
+                    "execution_count": result.execution_count.value(),
+                    "data": result.data,
+                    "metadata": result.metadata
+                });
+                serde_json::from_value(json).ok()
+            }
+            JupyterMessageContent::DisplayData(display) => {
+                let json = serde_json::json!({
+                    "output_type": "display_data",
+                    "data": display.data,
+                    "metadata": display.metadata
+                });
+                serde_json::from_value(json).ok()
+            }
+            JupyterMessageContent::ErrorOutput(error) => {
+                Some(nbformat::v4::Output::Error(nbformat::v4::ErrorOutput {
+                    ename: error.ename.clone(),
+                    evalue: error.evalue.clone(),
+                    traceback: error.traceback.clone(),
+                }))
+            }
+            _ => None,
+        }
     }
 }

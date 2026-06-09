@@ -66,6 +66,8 @@ pub struct YDocClient {
     file_id: String,
     /// Track the document state when we last synced, so we only send changes
     last_state: StateVector,
+    /// Whether the server writes outputs to Y.js (JSD does, jupyter-collaboration doesn't)
+    server_writes_outputs: bool,
 }
 
 impl YDocClient {
@@ -89,6 +91,7 @@ impl YDocClient {
             ws: ws_stream,
             file_id,
             last_state: StateVector::default(),
+            server_writes_outputs: session_id.is_none(),
         };
 
         // Step 4: Perform Y.js sync handshake with timeout
@@ -345,8 +348,11 @@ impl YDocClient {
         Ok(())
     }
 
+    pub fn server_writes_outputs(&self) -> bool {
+        self.server_writes_outputs
+    }
+
     /// Update cell outputs in the Y.js document
-    #[allow(dead_code)]
     pub fn update_cell_outputs(&mut self, cell_index: usize, outputs: Vec<Output>) -> Result<()> {
         let cells_array: ArrayRef = self.doc.get_or_insert_array("cells");
         let mut txn = self.doc.transact_mut();
@@ -358,7 +364,6 @@ impl YDocClient {
     }
 
     /// Update cell execution_count in the Y.js document
-    #[allow(dead_code)]
     pub fn update_cell_execution_count(
         &mut self,
         cell_index: usize,
