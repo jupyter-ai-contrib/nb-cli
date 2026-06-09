@@ -102,6 +102,7 @@ impl YDocClient {
         }
     }
 
+    /// Returns (file_id, session_id). session_id is present only via jupyter-collaboration.
     async fn get_file_id(
         server_url: &str,
         token: &str,
@@ -211,17 +212,18 @@ impl YDocClient {
             "ws"
         };
 
-        let mut ws_url = format!(
-            "{}://{}:{}/api/collaboration/room/json:notebook:{}?token={}",
-            ws_scheme, host, port, file_id, token
-        );
+        let mut ws_url = Url::parse(&format!(
+            "{}://{}:{}/api/collaboration/room/json:notebook:{}",
+            ws_scheme, host, port, file_id
+        ))
+        .context("Failed to build WebSocket URL")?;
 
+        ws_url.query_pairs_mut().append_pair("token", token);
         if let Some(sid) = session_id {
-            ws_url.push_str("&sessionId=");
-            ws_url.push_str(sid);
+            ws_url.query_pairs_mut().append_pair("sessionId", sid);
         }
 
-        Ok(ws_url)
+        Ok(ws_url.to_string())
     }
 
     /// Perform Y.js sync protocol handshake
