@@ -182,8 +182,15 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         }
     };
 
-    // Resolve ydoc availability for remote mode
-    let ydoc_available = common::resolve_ydoc_available(&args.server, &args.token);
+    // Resolve ydoc availability for remote mode (probe server if not cached)
+    let ydoc_available = match &mode {
+        ExecutionMode::Remote {
+            server_url, token, ..
+        } => Some(
+            common::resolve_ydoc_with_probe(server_url, token, &args.server, &args.token).await,
+        ),
+        ExecutionMode::Local => None,
+    };
 
     // Create execution config
     let config = ExecutionConfig {

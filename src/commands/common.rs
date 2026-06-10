@@ -296,6 +296,43 @@ pub async fn resolve_ydoc_with_probe(
     }
 }
 
+/// Read-modify-save a notebook via the Contents API.
+/// Handles: extract credentials, normalize path, fetch notebook, call `mutate`, save back.
+/// The closure receives (&mut Notebook, &normalized_file_path).
+pub async fn with_contents_api<F>(
+    file: &str,
+    mode: &ExecutionMode,
+    mutate: F,
+) -> Result<()>
+where
+    F: FnOnce(&mut nbformat::v4::Notebook, &str) -> Result<()>,
+{
+    let (server_url, token) = match mode {
+        ExecutionMode::Remote { server_url, token } => (server_url.clone(), token.clone()),
+        _ => bail!("Expected remote execution mode"),
+    };
+
+    let file_path = normalize_notebook_path(file);
+    let server_root = resolve_server_root();
+    let notebook_server_path = notebook_path_for_server(&file_path, server_root.as_deref());
+
+    let client =
+        crate::execution::remote::client::JupyterClient::new(server_url, token)?;
+    let mut notebook = client
+        .get_notebook(&notebook_server_path)
+        .await
+        .context("Failed to read notebook from server")?;
+
+    mutate(&mut notebook, &file_path)?;
+
+    client
+        .save_notebook(&notebook_server_path, &notebook)
+        .await
+        .context("Failed to save notebook to server")?;
+
+    Ok(())
+}
+
 /// Get the Jupyter server root directory from saved connection config.
 /// Returns None for manual connections or when no config exists.
 pub fn resolve_server_root() -> Option<String> {
