@@ -573,6 +573,14 @@ mod kernel_output_collector_tests {
         })
     }
 
+    fn display_data(plain_text: &str) -> JupyterMessageContent {
+        JupyterMessageContent::DisplayData(jupyter_protocol::DisplayData {
+            data: serde_json::from_value(serde_json::json!({ "text/plain": plain_text })).unwrap(),
+            metadata: serde_json::Map::new(),
+            transient: None,
+        })
+    }
+
     fn error(ename: &str, evalue: &str) -> JupyterMessageContent {
         JupyterMessageContent::ErrorOutput(jupyter_protocol::ErrorOutput {
             ename: ename.to_string(),
@@ -584,6 +592,7 @@ mod kernel_output_collector_tests {
     /// Feed a message sequence and return the final result, asserting that
     /// only a trailing Idle completes the collection.
     fn collect(messages: Vec<JupyterMessageContent>) -> ExecutionResult {
+        assert!(!messages.is_empty(), "test sequence must not be empty");
         let mut collector = KernelOutputCollector::new();
         let last = messages.len() - 1;
         for (i, msg) in messages.into_iter().enumerate() {
@@ -741,5 +750,68 @@ mod kernel_output_collector_tests {
             stream_texts(&result),
             vec![("stdout".to_string(), "new1 new2".to_string())]
         );
+    }
+
+    #[test]
+    fn deferred_clear_flushed_by_each_output_kind() {
+        for flusher in [
+            execute_result(1, "42"),
+            display_data("img"),
+            error("E", "v"),
+        ] {
+            let result = collect(vec![
+                stream(Stdio::Stdout, "stale"),
+                clear(true),
+                flusher,
+                status(ExecutionState::Idle),
+            ]);
+            assert_eq!(result.outputs.len(), 1, "stale output should be dropped");
+            assert!(
+                !matches!(&result.outputs[0], nbformat::v4::Output::Stream { .. }),
+                "remaining output should be the flushing output, not the stale stream"
+            );
+        }
+    }
+
+    #[test]
+    fn display_data_becomes_nbformat_output() {
+        let result = collect(vec![display_data("chart"), status(ExecutionState::Idle)]);
+        assert!(matches!(
+            result.outputs.as_slice(),
+            [nbformat::v4::Output::DisplayData(_)]
+        ));
+    }
+
+    #[test]
+    fn on_output_callback_receives_each_chunk_even_when_coalesced() {
+        use std::sync::{Arc, Mutex};
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_clone = Arc::clone(&seen);
+        let cb: crate::execution::OutputCallback = Box::new(move |o| {
+            let label = match o {
+                nbformat::v4::Output::Stream { text, .. } => format!("stream:{}", text.0),
+                nbformat::v4::Output::ExecuteResult(_) => "result".to_string(),
+                other => format!("{:?}", other),
+            };
+            seen_clone.lock().unwrap().push(label);
+        });
+
+        let mut collector = KernelOutputCollector::new();
+        for msg in [
+            stream(Stdio::Stdout, "a"),
+            stream(Stdio::Stdout, "b"),
+            execute_result(1, "42"),
+        ] {
+            assert!(!collector.handle(msg, Some(&cb)));
+        }
+        let result = collector.into_result();
+
+        // Callback sees every chunk as it arrives...
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["stream:a", "stream:b", "result"]
+        );
+        // ...while persisted outputs coalesce the stream chunks.
+        assert_eq!(result.outputs.len(), 2);
     }
 }
