@@ -392,16 +392,16 @@ impl JupyterClient {
     /// served via the Contents API path. The collab-session fallback in
     /// ydoc.rs `get_file_id` is kept for when a compatible handshake lands.
     ///
-    /// The probe indexes a junk "probe" path as a side effect. The default
-    /// ArbitraryFileIdManager accepts paths that don't exist on disk (verified
-    /// against jupyter-server-documents 0.2.2); a non-default manager that
-    /// rejects nonexistent paths would make this probe false-negative.
+    /// Probes with the server root path, which always exists, so the index
+    /// call is idempotent and creates no record for a fake path. Verified
+    /// against jupyter-server-documents 0.2.2 with both ArbitraryFileIdManager
+    /// and LocalFileIdManager: both return 200 for the root path.
     pub async fn probe_ydoc(&self) -> Result<bool> {
         let url = format!("{}/api/fileid/index", self.base_url);
         let response = self
             .client
             .post(&url)
-            .query(&[("token", self.token.as_str()), ("path", "probe")])
+            .query(&[("token", self.token.as_str()), ("path", "")])
             .send()
             .await
             .context("Failed to probe FileID API")?;
