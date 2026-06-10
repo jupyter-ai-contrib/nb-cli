@@ -158,6 +158,9 @@ impl RemoteExecutor {
                 match tokio::time::timeout_at(deadline, ydoc.recv_update()).await {
                     Ok(Ok(_)) => {}
                     Ok(Err(e)) => return Err(e).context("Y.js update error"),
+                    // Kernel already reported idle, so execution finished;
+                    // only output sync timed out. Return what we collected
+                    // instead of erroring (unlike the pre-idle timeout below).
                     Err(_) => break,
                 }
             } else {
