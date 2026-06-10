@@ -219,12 +219,7 @@ impl RemoteExecutor {
             .send_execute_request(code, !self.config.allow_errors, cell_id)
             .await?;
 
-        let mut outputs: Vec<nbformat::v4::Output> = Vec::new();
-        let mut execution_count: Option<i64> = None;
-        let mut error_info: Option<ExecutionError> = None;
-        // Set by clear_output(wait=True): defer the clear until the next
-        // output arrives, keeping current outputs if none follows.
-        let mut clear_pending = false;
+        let mut collector = KernelOutputCollector::new();
 
         loop {
             let msg = match tokio::time::timeout_at(deadline, ws.recv_message()).await {
@@ -244,125 +239,166 @@ impl RemoteExecutor {
                 continue;
             }
 
-            // Apply a deferred clear_output(wait=True) when the next output arrives
-            if clear_pending
-                && matches!(
-                    msg.content,
-                    JupyterMessageContent::StreamContent(_)
-                        | JupyterMessageContent::ExecuteResult(_)
-                        | JupyterMessageContent::DisplayData(_)
-                        | JupyterMessageContent::ErrorOutput(_)
-                )
-            {
-                outputs.clear();
-                clear_pending = false;
-            }
-
-            match msg.content {
-                JupyterMessageContent::Status(status)
-                    if matches!(
-                        status.execution_state,
-                        jupyter_protocol::ExecutionState::Idle
-                    ) =>
-                {
-                    break;
-                }
-                JupyterMessageContent::StreamContent(stream) => {
-                    let name = match stream.name {
-                        jupyter_protocol::Stdio::Stdout => "stdout".to_string(),
-                        jupyter_protocol::Stdio::Stderr => "stderr".to_string(),
-                    };
-                    if let Some(cb) = &on_output {
-                        let chunk = nbformat::v4::Output::Stream {
-                            name: name.clone(),
-                            text: nbformat::v4::MultilineString(stream.text.clone()),
-                        };
-                        cb(&chunk);
-                    }
-                    // Merge consecutive same-name stream outputs into one entry
-                    let coalesced = if let Some(nbformat::v4::Output::Stream {
-                        name: ref last_name,
-                        text: ref mut last_text,
-                    }) = outputs.last_mut()
-                    {
-                        if *last_name == name {
-                            last_text.0.push_str(&stream.text);
-                            true
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
-                    if !coalesced {
-                        outputs.push(nbformat::v4::Output::Stream {
-                            name,
-                            text: nbformat::v4::MultilineString(stream.text),
-                        });
-                    }
-                }
-                JupyterMessageContent::ExecuteResult(result) => {
-                    execution_count = Some(result.execution_count.value() as i64);
-                    let json = serde_json::json!({
-                        "output_type": "execute_result",
-                        "execution_count": result.execution_count.value(),
-                        "data": result.data,
-                        "metadata": result.metadata
-                    });
-                    if let Ok(output) = serde_json::from_value::<nbformat::v4::Output>(json) {
-                        if let Some(cb) = &on_output {
-                            cb(&output);
-                        }
-                        outputs.push(output);
-                    }
-                }
-                JupyterMessageContent::DisplayData(display) => {
-                    let json = serde_json::json!({
-                        "output_type": "display_data",
-                        "data": display.data,
-                        "metadata": display.metadata
-                    });
-                    if let Ok(output) = serde_json::from_value::<nbformat::v4::Output>(json) {
-                        if let Some(cb) = &on_output {
-                            cb(&output);
-                        }
-                        outputs.push(output);
-                    }
-                }
-                JupyterMessageContent::ErrorOutput(error) => {
-                    error_info = Some(ExecutionError {
-                        ename: error.ename.clone(),
-                        evalue: error.evalue.clone(),
-                        traceback: error.traceback.clone(),
-                    });
-                    let output = nbformat::v4::Output::Error(nbformat::v4::ErrorOutput {
-                        ename: error.ename,
-                        evalue: error.evalue,
-                        traceback: error.traceback,
-                    });
-                    if let Some(cb) = &on_output {
-                        cb(&output);
-                    }
-                    outputs.push(output);
-                }
-                JupyterMessageContent::ClearOutput(clear) => {
-                    if clear.wait {
-                        clear_pending = true;
-                    } else {
-                        outputs.clear();
-                    }
-                }
-                JupyterMessageContent::ExecuteInput(input) => {
-                    execution_count = Some(input.execution_count.0 as i64);
-                }
-                _ => {}
+            if collector.handle(msg.content, on_output) {
+                break;
             }
         }
 
-        if let Some(error) = error_info {
-            Ok(ExecutionResult::error(outputs, execution_count, error))
+        Ok(collector.into_result())
+    }
+}
+
+/// Accumulates nbformat outputs from a kernel iopub message stream, applying
+/// the same persistence semantics as nbclient: consecutive same-name stream
+/// outputs are coalesced into one entry, clear_output is applied immediately,
+/// and clear_output(wait=True) is deferred until the next output arrives so
+/// that outputs are kept when nothing follows.
+struct KernelOutputCollector {
+    outputs: Vec<nbformat::v4::Output>,
+    execution_count: Option<i64>,
+    error_info: Option<ExecutionError>,
+    clear_pending: bool,
+}
+
+impl KernelOutputCollector {
+    fn new() -> Self {
+        Self {
+            outputs: Vec::new(),
+            execution_count: None,
+            error_info: None,
+            clear_pending: false,
+        }
+    }
+
+    /// Process one kernel message belonging to the tracked execution.
+    /// Returns true when the kernel reports idle, completing the collection.
+    fn handle(
+        &mut self,
+        content: JupyterMessageContent,
+        on_output: Option<&crate::execution::OutputCallback>,
+    ) -> bool {
+        // Apply a deferred clear_output(wait=True) when the next output arrives
+        if self.clear_pending
+            && matches!(
+                content,
+                JupyterMessageContent::StreamContent(_)
+                    | JupyterMessageContent::ExecuteResult(_)
+                    | JupyterMessageContent::DisplayData(_)
+                    | JupyterMessageContent::ErrorOutput(_)
+            )
+        {
+            self.outputs.clear();
+            self.clear_pending = false;
+        }
+
+        match content {
+            JupyterMessageContent::Status(status)
+                if matches!(
+                    status.execution_state,
+                    jupyter_protocol::ExecutionState::Idle
+                ) =>
+            {
+                return true;
+            }
+            JupyterMessageContent::StreamContent(stream) => {
+                let name = match stream.name {
+                    jupyter_protocol::Stdio::Stdout => "stdout".to_string(),
+                    jupyter_protocol::Stdio::Stderr => "stderr".to_string(),
+                };
+                if let Some(cb) = &on_output {
+                    let chunk = nbformat::v4::Output::Stream {
+                        name: name.clone(),
+                        text: nbformat::v4::MultilineString(stream.text.clone()),
+                    };
+                    cb(&chunk);
+                }
+                // Merge consecutive same-name stream outputs into one entry
+                let coalesced = if let Some(nbformat::v4::Output::Stream {
+                    name: ref last_name,
+                    text: ref mut last_text,
+                }) = self.outputs.last_mut()
+                {
+                    if *last_name == name {
+                        last_text.0.push_str(&stream.text);
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if !coalesced {
+                    self.outputs.push(nbformat::v4::Output::Stream {
+                        name,
+                        text: nbformat::v4::MultilineString(stream.text),
+                    });
+                }
+            }
+            JupyterMessageContent::ExecuteResult(result) => {
+                self.execution_count = Some(result.execution_count.value() as i64);
+                let json = serde_json::json!({
+                    "output_type": "execute_result",
+                    "execution_count": result.execution_count.value(),
+                    "data": result.data,
+                    "metadata": result.metadata
+                });
+                if let Ok(output) = serde_json::from_value::<nbformat::v4::Output>(json) {
+                    if let Some(cb) = &on_output {
+                        cb(&output);
+                    }
+                    self.outputs.push(output);
+                }
+            }
+            JupyterMessageContent::DisplayData(display) => {
+                let json = serde_json::json!({
+                    "output_type": "display_data",
+                    "data": display.data,
+                    "metadata": display.metadata
+                });
+                if let Ok(output) = serde_json::from_value::<nbformat::v4::Output>(json) {
+                    if let Some(cb) = &on_output {
+                        cb(&output);
+                    }
+                    self.outputs.push(output);
+                }
+            }
+            JupyterMessageContent::ErrorOutput(error) => {
+                self.error_info = Some(ExecutionError {
+                    ename: error.ename.clone(),
+                    evalue: error.evalue.clone(),
+                    traceback: error.traceback.clone(),
+                });
+                let output = nbformat::v4::Output::Error(nbformat::v4::ErrorOutput {
+                    ename: error.ename,
+                    evalue: error.evalue,
+                    traceback: error.traceback,
+                });
+                if let Some(cb) = &on_output {
+                    cb(&output);
+                }
+                self.outputs.push(output);
+            }
+            JupyterMessageContent::ClearOutput(clear) => {
+                if clear.wait {
+                    self.clear_pending = true;
+                } else {
+                    self.outputs.clear();
+                }
+            }
+            JupyterMessageContent::ExecuteInput(input) => {
+                self.execution_count = Some(input.execution_count.0 as i64);
+            }
+            _ => {}
+        }
+
+        false
+    }
+
+    fn into_result(self) -> ExecutionResult {
+        if let Some(error) = self.error_info {
+            ExecutionResult::error(self.outputs, self.execution_count, error)
         } else {
-            Ok(ExecutionResult::success(outputs, execution_count))
+            ExecutionResult::success(self.outputs, self.execution_count)
         }
     }
 }
@@ -503,5 +539,207 @@ impl ExecutionBackend for RemoteExecutor {
         // stay alive across multiple cell executions.
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod kernel_output_collector_tests {
+    use super::*;
+    use jupyter_protocol::{
+        ClearOutput, ExecutionCount, ExecutionState, Status, Stdio, StreamContent,
+    };
+
+    fn stream(name: Stdio, text: &str) -> JupyterMessageContent {
+        JupyterMessageContent::StreamContent(StreamContent {
+            name,
+            text: text.to_string(),
+        })
+    }
+
+    fn clear(wait: bool) -> JupyterMessageContent {
+        JupyterMessageContent::ClearOutput(ClearOutput { wait })
+    }
+
+    fn status(execution_state: ExecutionState) -> JupyterMessageContent {
+        JupyterMessageContent::Status(Status { execution_state })
+    }
+
+    fn execute_result(ec: usize, plain_text: &str) -> JupyterMessageContent {
+        JupyterMessageContent::ExecuteResult(jupyter_protocol::ExecuteResult {
+            execution_count: ExecutionCount::new(ec),
+            data: serde_json::from_value(serde_json::json!({ "text/plain": plain_text })).unwrap(),
+            metadata: serde_json::Map::new(),
+            transient: None,
+        })
+    }
+
+    fn error(ename: &str, evalue: &str) -> JupyterMessageContent {
+        JupyterMessageContent::ErrorOutput(jupyter_protocol::ErrorOutput {
+            ename: ename.to_string(),
+            evalue: evalue.to_string(),
+            traceback: vec![format!("{}: {}", ename, evalue)],
+        })
+    }
+
+    /// Feed a message sequence and return the final result, asserting that
+    /// only a trailing Idle completes the collection.
+    fn collect(messages: Vec<JupyterMessageContent>) -> ExecutionResult {
+        let mut collector = KernelOutputCollector::new();
+        let last = messages.len() - 1;
+        for (i, msg) in messages.into_iter().enumerate() {
+            let is_idle = matches!(
+                &msg,
+                JupyterMessageContent::Status(s) if s.execution_state == ExecutionState::Idle
+            );
+            let done = collector.handle(msg, None);
+            assert_eq!(done, is_idle, "only Idle should complete (message {})", i);
+            if done {
+                assert_eq!(
+                    i, last,
+                    "Idle must be the last message in the test sequence"
+                );
+            }
+        }
+        collector.into_result()
+    }
+
+    fn stream_texts(result: &ExecutionResult) -> Vec<(String, String)> {
+        result
+            .outputs
+            .iter()
+            .map(|o| match o {
+                nbformat::v4::Output::Stream { name, text } => (name.clone(), text.0.clone()),
+                other => panic!("expected stream output, got {:?}", other),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn coalesces_consecutive_same_name_streams() {
+        let result = collect(vec![
+            stream(Stdio::Stdout, "a\n"),
+            stream(Stdio::Stdout, "b\n"),
+            stream(Stdio::Stdout, "c\n"),
+            status(ExecutionState::Idle),
+        ]);
+        assert_eq!(
+            stream_texts(&result),
+            vec![("stdout".to_string(), "a\nb\nc\n".to_string())]
+        );
+    }
+
+    #[test]
+    fn streams_with_different_names_stay_separate() {
+        let result = collect(vec![
+            stream(Stdio::Stdout, "out1"),
+            stream(Stdio::Stderr, "err"),
+            stream(Stdio::Stdout, "out2"),
+            status(ExecutionState::Idle),
+        ]);
+        assert_eq!(
+            stream_texts(&result),
+            vec![
+                ("stdout".to_string(), "out1".to_string()),
+                ("stderr".to_string(), "err".to_string()),
+                ("stdout".to_string(), "out2".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn immediate_clear_drops_prior_outputs() {
+        let result = collect(vec![
+            stream(Stdio::Stdout, "before"),
+            clear(false),
+            stream(Stdio::Stdout, "after"),
+            status(ExecutionState::Idle),
+        ]);
+        assert_eq!(
+            stream_texts(&result),
+            vec![("stdout".to_string(), "after".to_string())]
+        );
+    }
+
+    #[test]
+    fn deferred_clear_applies_at_next_output() {
+        let result = collect(vec![
+            stream(Stdio::Stdout, "frame 0"),
+            clear(true),
+            stream(Stdio::Stdout, "frame 1"),
+            status(ExecutionState::Idle),
+        ]);
+        assert_eq!(
+            stream_texts(&result),
+            vec![("stdout".to_string(), "frame 1".to_string())]
+        );
+    }
+
+    #[test]
+    fn trailing_deferred_clear_keeps_outputs() {
+        let result = collect(vec![
+            stream(Stdio::Stdout, "kept"),
+            clear(true),
+            status(ExecutionState::Idle),
+        ]);
+        assert_eq!(
+            stream_texts(&result),
+            vec![("stdout".to_string(), "kept".to_string())]
+        );
+    }
+
+    #[test]
+    fn error_produces_error_result_with_output() {
+        let result = collect(vec![
+            error("ZeroDivisionError", "division by zero"),
+            status(ExecutionState::Idle),
+        ]);
+        assert!(!result.success);
+        let err = result.error.expect("error info should be set");
+        assert_eq!(err.ename, "ZeroDivisionError");
+        assert!(matches!(
+            result.outputs.as_slice(),
+            [nbformat::v4::Output::Error(e)] if e.ename == "ZeroDivisionError"
+        ));
+    }
+
+    #[test]
+    fn execute_result_sets_execution_count_and_output() {
+        let result = collect(vec![execute_result(3, "42"), status(ExecutionState::Idle)]);
+        assert!(result.success);
+        assert_eq!(result.execution_count, Some(3));
+        assert!(matches!(
+            result.outputs.as_slice(),
+            [nbformat::v4::Output::ExecuteResult(er)] if er.execution_count.0 == 3
+        ));
+    }
+
+    #[test]
+    fn busy_status_and_unrelated_messages_are_ignored() {
+        let result = collect(vec![
+            status(ExecutionState::Busy),
+            JupyterMessageContent::ExecuteInput(jupyter_protocol::ExecuteInput {
+                code: "1 + 1".to_string(),
+                execution_count: ExecutionCount::new(7),
+            }),
+            status(ExecutionState::Idle),
+        ]);
+        assert!(result.success);
+        assert_eq!(result.execution_count, Some(7));
+        assert!(result.outputs.is_empty());
+    }
+
+    #[test]
+    fn clear_starts_a_new_coalescing_run() {
+        let result = collect(vec![
+            stream(Stdio::Stdout, "old"),
+            clear(false),
+            stream(Stdio::Stdout, "new1 "),
+            stream(Stdio::Stdout, "new2"),
+            status(ExecutionState::Idle),
+        ]);
+        assert_eq!(
+            stream_texts(&result),
+            vec![("stdout".to_string(), "new1 new2".to_string())]
+        );
     }
 }
