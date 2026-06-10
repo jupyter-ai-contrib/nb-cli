@@ -246,14 +246,34 @@ impl RemoteExecutor {
                         jupyter_protocol::Stdio::Stdout => "stdout".to_string(),
                         jupyter_protocol::Stdio::Stderr => "stderr".to_string(),
                     };
-                    let output = nbformat::v4::Output::Stream {
-                        name,
-                        text: nbformat::v4::MultilineString(stream.text),
-                    };
                     if let Some(cb) = &on_output {
-                        cb(&output);
+                        let chunk = nbformat::v4::Output::Stream {
+                            name: name.clone(),
+                            text: nbformat::v4::MultilineString(stream.text.clone()),
+                        };
+                        cb(&chunk);
                     }
-                    outputs.push(output);
+                    // Coalesce consecutive streams with same name (matches nbclient behavior)
+                    let coalesced = if let Some(nbformat::v4::Output::Stream {
+                        name: ref last_name,
+                        text: ref mut last_text,
+                    }) = outputs.last_mut()
+                    {
+                        if *last_name == name {
+                            last_text.0.push_str(&stream.text);
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+                    if !coalesced {
+                        outputs.push(nbformat::v4::Output::Stream {
+                            name,
+                            text: nbformat::v4::MultilineString(stream.text),
+                        });
+                    }
                 }
                 JupyterMessageContent::ExecuteResult(result) => {
                     execution_count = Some(result.execution_count.value() as i64);
@@ -298,6 +318,9 @@ impl RemoteExecutor {
                         cb(&output);
                     }
                     outputs.push(output);
+                }
+                JupyterMessageContent::ClearOutput(_) => {
+                    outputs.clear();
                 }
                 JupyterMessageContent::ExecuteInput(input) => {
                     execution_count = Some(input.execution_count.0 as i64);

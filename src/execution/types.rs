@@ -143,14 +143,12 @@ impl MessageOutput {
     /// Convert to nbformat Output
     #[allow(dead_code)]
     pub fn to_nbformat_output(&self) -> Result<nbformat::v4::Output> {
-        // Use serde to convert between the types
         match self {
             MessageOutput::Stream { name, text } => Ok(nbformat::v4::Output::Stream {
                 name: name.clone(),
                 text: nbformat::v4::MultilineString(text.clone()),
             }),
             MessageOutput::DisplayData { data, metadata } => {
-                // Create a temporary JSON object with the right structure
                 let json = serde_json::json!({
                     "output_type": "display_data",
                     "data": data,
@@ -163,7 +161,6 @@ impl MessageOutput {
                 metadata,
                 execution_count,
             } => {
-                // Create a temporary JSON object with the right structure
                 let json = serde_json::json!({
                     "output_type": "execute_result",
                     "execution_count": execution_count,
@@ -184,3 +181,4 @@ impl MessageOutput {
         }
     }
 }
+
