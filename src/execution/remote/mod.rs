@@ -219,6 +219,9 @@ impl RemoteExecutor {
         let mut outputs: Vec<nbformat::v4::Output> = Vec::new();
         let mut execution_count: Option<i64> = None;
         let mut error_info: Option<ExecutionError> = None;
+        // Set by clear_output(wait=True): defer the clear until the next
+        // output arrives, keeping current outputs if none follows.
+        let mut clear_pending = false;
 
         loop {
             let msg = match tokio::time::timeout_at(deadline, ws.recv_message()).await {
@@ -248,6 +251,10 @@ impl RemoteExecutor {
                     break;
                 }
                 JupyterMessageContent::StreamContent(stream) => {
+                    if clear_pending {
+                        outputs.clear();
+                        clear_pending = false;
+                    }
                     let name = match stream.name {
                         jupyter_protocol::Stdio::Stdout => "stdout".to_string(),
                         jupyter_protocol::Stdio::Stderr => "stderr".to_string(),
@@ -259,7 +266,7 @@ impl RemoteExecutor {
                         };
                         cb(&chunk);
                     }
-                    // Coalesce consecutive streams with same name (matches nbclient behavior)
+                    // Merge consecutive same-name stream outputs into one entry
                     let coalesced = if let Some(nbformat::v4::Output::Stream {
                         name: ref last_name,
                         text: ref mut last_text,
@@ -282,6 +289,10 @@ impl RemoteExecutor {
                     }
                 }
                 JupyterMessageContent::ExecuteResult(result) => {
+                    if clear_pending {
+                        outputs.clear();
+                        clear_pending = false;
+                    }
                     execution_count = Some(result.execution_count.value() as i64);
                     let json = serde_json::json!({
                         "output_type": "execute_result",
@@ -297,6 +308,10 @@ impl RemoteExecutor {
                     }
                 }
                 JupyterMessageContent::DisplayData(display) => {
+                    if clear_pending {
+                        outputs.clear();
+                        clear_pending = false;
+                    }
                     let json = serde_json::json!({
                         "output_type": "display_data",
                         "data": display.data,
@@ -310,6 +325,10 @@ impl RemoteExecutor {
                     }
                 }
                 JupyterMessageContent::ErrorOutput(error) => {
+                    if clear_pending {
+                        outputs.clear();
+                        clear_pending = false;
+                    }
                     error_info = Some(ExecutionError {
                         ename: error.ename.clone(),
                         evalue: error.evalue.clone(),
@@ -325,8 +344,12 @@ impl RemoteExecutor {
                     }
                     outputs.push(output);
                 }
-                JupyterMessageContent::ClearOutput(_) => {
-                    outputs.clear();
+                JupyterMessageContent::ClearOutput(clear) => {
+                    if clear.wait {
+                        clear_pending = true;
+                    } else {
+                        outputs.clear();
+                    }
                 }
                 JupyterMessageContent::ExecuteInput(input) => {
                     execution_count = Some(input.execution_count.0 as i64);
