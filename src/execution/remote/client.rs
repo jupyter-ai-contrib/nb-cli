@@ -382,13 +382,15 @@ impl JupyterClient {
         Ok(())
     }
 
-    /// Probe whether the Y.js/collaboration backend (FileID API) is available.
-    /// Returns true if the server has jupyter-collaboration/jupyter-server-documents.
+    /// Probe whether the Y.js backend (jupyter-server-documents) is available.
+    /// Uses POST /api/fileid/index, which only jupyter-server-documents registers.
+    /// GET /api/fileid/id cannot be used: it returns 404 for unindexed paths
+    /// even when the fileid extension is installed.
     pub async fn probe_ydoc(&self) -> Result<bool> {
-        let url = format!("{}/api/fileid/id", self.base_url);
+        let url = format!("{}/api/fileid/index", self.base_url);
         let response = self
             .client
-            .get(&url)
+            .post(&url)
             .query(&[("token", self.token.as_str()), ("path", "probe")])
             .send()
             .await
