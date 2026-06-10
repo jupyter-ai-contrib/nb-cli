@@ -131,64 +131,43 @@ async fn execute_with_contents_api(
     args: ClearOutputsArgs,
     mode: crate::execution::types::ExecutionMode,
 ) -> Result<()> {
-    let (server_url, token) = match &mode {
-        crate::execution::types::ExecutionMode::Remote { server_url, token } => {
-            (server_url.clone(), token.clone())
-        }
-        _ => bail!("Expected remote execution mode"),
-    };
-
-    let file_path = common::normalize_notebook_path(&args.file);
-    let server_root = common::resolve_server_root();
-    let notebook_server_path = common::notebook_path_for_server(&file_path, server_root.as_deref());
-
-    let client = crate::execution::remote::client::JupyterClient::new(
-        server_url.clone(),
-        token.clone(),
-    )?;
-    let mut notebook = client
-        .get_notebook(&notebook_server_path)
-        .await
-        .context("Failed to read notebook from server")?;
-
-    let cells_cleared = if let Some(ref cell_id) = args.cell {
-        let (_, cell) = common::find_cell_by_id_mut(&mut notebook.cells, cell_id)?;
-        clear_cell_output(cell, args.keep_execution_count)?;
-        1
-    } else if let Some(cell_index) = args.cell_index {
-        let index = common::normalize_index(cell_index, notebook.cells.len())?;
-        clear_cell_output(&mut notebook.cells[index], args.keep_execution_count)?;
-        1
-    } else {
-        let mut count = 0;
-        for cell in &mut notebook.cells {
-            if let Cell::Code { .. } = cell {
-                clear_cell_output(cell, args.keep_execution_count)?;
-                count += 1;
+    let file = args.file.clone();
+    common::with_contents_api(&file, &mode, |notebook, file_path| {
+        let cells_cleared = if let Some(ref cell_id) = args.cell {
+            let (_, cell) = common::find_cell_by_id_mut(&mut notebook.cells, cell_id)?;
+            clear_cell_output(cell, args.keep_execution_count)?;
+            1
+        } else if let Some(cell_index) = args.cell_index {
+            let index = common::normalize_index(cell_index, notebook.cells.len())?;
+            clear_cell_output(&mut notebook.cells[index], args.keep_execution_count)?;
+            1
+        } else {
+            let mut count = 0;
+            for cell in &mut notebook.cells {
+                if let Cell::Code { .. } = cell {
+                    clear_cell_output(cell, args.keep_execution_count)?;
+                    count += 1;
+                }
             }
-        }
-        count
-    };
+            count
+        };
 
-    client
-        .save_notebook(&notebook_server_path, &notebook)
-        .await
-        .context("Failed to save notebook to server")?;
+        let result = ClearOutputsResult {
+            file: file_path.to_string(),
+            cells_cleared,
+            execution_counts_cleared: !args.keep_execution_count,
+        };
 
-    let result = ClearOutputsResult {
-        file: file_path,
-        cells_cleared,
-        execution_counts_cleared: !args.keep_execution_count,
-    };
+        let format = if args.json {
+            OutputFormat::Json
+        } else {
+            OutputFormat::Text
+        };
+        output_result(&result, &format)?;
 
-    let format = if args.json {
-        OutputFormat::Json
-    } else {
-        OutputFormat::Text
-    };
-    output_result(&result, &format)?;
-
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 fn execute_file_based(args: ClearOutputsArgs) -> Result<()> {

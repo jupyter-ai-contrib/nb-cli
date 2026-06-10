@@ -161,79 +161,58 @@ async fn execute_with_contents_api(
     args: DeleteCellArgs,
     mode: crate::execution::types::ExecutionMode,
 ) -> Result<()> {
-    let (server_url, token) = match &mode {
-        crate::execution::types::ExecutionMode::Remote { server_url, token } => {
-            (server_url.clone(), token.clone())
+    let file = args.file.clone();
+    common::with_contents_api(&file, &mode, |notebook, file_path| {
+        let mut indices_to_delete: HashSet<usize> = HashSet::new();
+
+        if !args.cell.is_empty() {
+            for id in &args.cell {
+                let (index, _) = common::find_cell_by_id(&notebook.cells, id)?;
+                indices_to_delete.insert(index);
+            }
+        } else if !args.cell_index.is_empty() {
+            for idx in &args.cell_index {
+                let normalized = common::normalize_index(*idx, notebook.cells.len())?;
+                indices_to_delete.insert(normalized);
+            }
+        } else if let Some(ref range_str) = args.range {
+            let (start, end) = parse_range(range_str, notebook.cells.len())?;
+            for i in start..end {
+                indices_to_delete.insert(i);
+            }
+        } else {
+            bail!("Must specify --cell, --cell-index, or --range");
         }
-        _ => bail!("Expected remote execution mode"),
-    };
 
-    let file_path = common::normalize_notebook_path(&args.file);
-    let server_root = common::resolve_server_root();
-    let notebook_server_path = common::notebook_path_for_server(&file_path, server_root.as_deref());
-
-    let client = crate::execution::remote::client::JupyterClient::new(
-        server_url.clone(),
-        token.clone(),
-    )?;
-    let mut notebook = client
-        .get_notebook(&notebook_server_path)
-        .await
-        .context("Failed to read notebook from server")?;
-
-    let mut indices_to_delete: HashSet<usize> = HashSet::new();
-
-    if !args.cell.is_empty() {
-        for id in &args.cell {
-            let (index, _) = common::find_cell_by_id(&notebook.cells, id)?;
-            indices_to_delete.insert(index);
+        if indices_to_delete.len() >= notebook.cells.len() {
+            bail!("Cannot delete all cells from notebook (must keep at least 1 cell)");
         }
-    } else if !args.cell_index.is_empty() {
-        for idx in &args.cell_index {
-            let normalized = common::normalize_index(*idx, notebook.cells.len())?;
-            indices_to_delete.insert(normalized);
+
+        let mut sorted_indices: Vec<usize> = indices_to_delete.into_iter().collect();
+        sorted_indices.sort_by(|a, b| b.cmp(a));
+
+        for idx in &sorted_indices {
+            notebook.cells.remove(*idx);
         }
-    } else if let Some(ref range_str) = args.range {
-        let (start, end) = parse_range(range_str, notebook.cells.len())?;
-        for i in start..end {
-            indices_to_delete.insert(i);
-        }
-    } else {
-        bail!("Must specify --cell, --cell-index, or --range");
-    }
 
-    if indices_to_delete.len() >= notebook.cells.len() {
-        bail!("Cannot delete all cells from notebook (must keep at least 1 cell)");
-    }
+        let cells_deleted = sorted_indices.len();
 
-    let mut sorted_indices: Vec<usize> = indices_to_delete.into_iter().collect();
-    sorted_indices.sort_by(|a, b| b.cmp(a));
+        let result = DeleteCellResult {
+            file: file_path.to_string(),
+            cells_deleted,
+            remaining_cells: notebook.cells.len(),
+        };
 
-    for idx in &sorted_indices {
-        notebook.cells.remove(*idx);
-    }
+        let format = if args.json {
+            OutputFormat::Json
+        } else {
+            OutputFormat::Text
+        };
+        output_result(&result, &format)?;
 
-    let cells_deleted = sorted_indices.len();
-
-    client
-        .save_notebook(&notebook_server_path, &notebook)
-        .await
-        .context("Failed to save notebook to server")?;
-
-    let result = DeleteCellResult {
-        file: file_path,
-        cells_deleted,
-        remaining_cells: notebook.cells.len(),
-    };
-
-    let format = if args.json {
-        OutputFormat::Json
-    } else {
-        OutputFormat::Text
-    };
-    output_result(&result, &format)?;
-
-    Ok(())
+        Ok(())
+    })
+    .await
 }
 
 fn execute_file_based(args: DeleteCellArgs) -> Result<()> {
