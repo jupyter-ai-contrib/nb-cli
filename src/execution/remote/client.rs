@@ -388,10 +388,14 @@ impl JupyterClient {
     /// even when the fileid extension is installed.
     ///
     /// jupyter-collaboration servers intentionally probe as unavailable: our
-    /// Y.js room handshake is not compatible with them, so they are served via
-    /// the Contents API path instead. The probe indexes a junk "probe" path as
-    /// a side effect; jupyter-server-documents' default ArbitraryFileIdManager
-    /// accepts paths that don't exist on disk (verified against 0.2.2).
+    /// Y.js room handshake is not compatible with them today, so they are
+    /// served via the Contents API path. The collab-session fallback in
+    /// ydoc.rs `get_file_id` is kept for when a compatible handshake lands.
+    ///
+    /// The probe indexes a junk "probe" path as a side effect. The default
+    /// ArbitraryFileIdManager accepts paths that don't exist on disk (verified
+    /// against jupyter-server-documents 0.2.2); a non-default manager that
+    /// rejects nonexistent paths would make this probe false-negative.
     pub async fn probe_ydoc(&self) -> Result<bool> {
         let url = format!("{}/api/fileid/index", self.base_url);
         let response = self
