@@ -162,6 +162,12 @@ impl RemoteExecutor {
                 }
             } else {
                 tokio::select! {
+                    _ = tokio::time::sleep_until(deadline) => {
+                        anyhow::bail!(
+                            "Cell execution timed out after {:?}",
+                            self.config.timeout
+                        );
+                    }
                     kernel_msg = ws.recv_message() => {
                         if let Some(msg) = kernel_msg? {
                             let is_ours = msg.parent_header.as_ref()
