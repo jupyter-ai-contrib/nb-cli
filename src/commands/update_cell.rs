@@ -201,7 +201,7 @@ async fn execute_with_contents_api(
     use nbformat::v4::Cell;
 
     let file = args.file.clone();
-    common::with_contents_api(&file, &mode, |notebook, file_path| {
+    let result = common::with_contents_api(&file, &mode, |notebook, file_path| {
         let (index, cell_id) = if let Some(ref id) = args.cell {
             let (idx, cell) = common::find_cell_by_id(&notebook.cells, id)?;
             (idx, cell.id().to_string())
@@ -314,23 +314,21 @@ async fn execute_with_contents_api(
             updates.push(format!("type changed to {}", type_name));
         }
 
-        let result = UpdateCellResult {
+        Ok(UpdateCellResult {
             file: file_path.to_string(),
             cell_id,
             index,
             updated: updates,
-        };
-
-        let format = if args.json {
-            OutputFormat::Json
-        } else {
-            OutputFormat::Text
-        };
-        output_result(&result, &format)?;
-
-        Ok(())
+        })
     })
-    .await
+    .await?;
+
+    let format = if args.json {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Text
+    };
+    output_result(&result, &format)
 }
 
 fn execute_file_based(args: UpdateCellArgs) -> Result<()> {

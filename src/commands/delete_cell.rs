@@ -162,7 +162,7 @@ async fn execute_with_contents_api(
     mode: crate::execution::types::ExecutionMode,
 ) -> Result<()> {
     let file = args.file.clone();
-    common::with_contents_api(&file, &mode, |notebook, file_path| {
+    let result = common::with_contents_api(&file, &mode, |notebook, file_path| {
         let mut indices_to_delete: HashSet<usize> = HashSet::new();
 
         if !args.cell.is_empty() {
@@ -197,22 +197,20 @@ async fn execute_with_contents_api(
 
         let cells_deleted = sorted_indices.len();
 
-        let result = DeleteCellResult {
+        Ok(DeleteCellResult {
             file: file_path.to_string(),
             cells_deleted,
             remaining_cells: notebook.cells.len(),
-        };
-
-        let format = if args.json {
-            OutputFormat::Json
-        } else {
-            OutputFormat::Text
-        };
-        output_result(&result, &format)?;
-
-        Ok(())
+        })
     })
-    .await
+    .await?;
+
+    let format = if args.json {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Text
+    };
+    output_result(&result, &format)
 }
 
 fn execute_file_based(args: DeleteCellArgs) -> Result<()> {
