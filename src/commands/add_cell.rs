@@ -374,83 +374,84 @@ async fn execute_with_contents_api(
     mode: crate::execution::types::ExecutionMode,
 ) -> Result<()> {
     let file = args.file.clone();
-    common::with_contents_api(&file, &mode, |notebook, file_path| {
-        let raw_text = common::parse_source_text(&args.source)?;
-        let parsed_cells = parse_source_into_cells(&raw_text, &args.cell_type);
+    let (file_path, added_cells, total_cells) =
+        common::with_contents_api(&file, &mode, |notebook, file_path| {
+            let raw_text = common::parse_source_text(&args.source)?;
+            let parsed_cells = parse_source_into_cells(&raw_text, &args.cell_type);
 
-        if parsed_cells.len() > 1 && args.id.is_some() {
-            bail!("--id cannot be used when adding multiple cells");
-        }
-
-        let insert_index = if let Some(idx) = args.insert_at {
-            if idx < 0 {
-                let abs_idx = idx.unsigned_abs() as usize;
-                if abs_idx > notebook.cells.len() {
-                    bail!(
-                        "Negative index {} out of range (notebook has {} cells)",
-                        idx,
-                        notebook.cells.len()
-                    );
-                }
-                notebook.cells.len() - abs_idx
-            } else {
-                let pos_idx = idx as usize;
-                if pos_idx > notebook.cells.len() {
-                    bail!(
-                        "Index {} out of range (notebook has {} cells)",
-                        idx,
-                        notebook.cells.len()
-                    );
-                }
-                pos_idx
+            if parsed_cells.len() > 1 && args.id.is_some() {
+                bail!("--id cannot be used when adding multiple cells");
             }
-        } else if let Some(ref after_id) = args.after {
-            let (index, _) = common::find_cell_by_id(&notebook.cells, after_id)?;
-            index + 1
-        } else if let Some(ref before_id) = args.before {
-            let (index, _) = common::find_cell_by_id(&notebook.cells, before_id)?;
-            index
-        } else {
-            notebook.cells.len()
-        };
 
-        let mut added_cells: Vec<AddedCellInfo> = Vec::new();
-
-        for (i, parsed) in parsed_cells.into_iter().enumerate() {
-            let cell_id = if let Some(ref id) = args.id {
-                if notebook.cells.iter().any(|c| c.id().as_str() == *id) {
-                    bail!("Cell ID '{}' already exists in notebook", id);
+            let insert_index = if let Some(idx) = args.insert_at {
+                if idx < 0 {
+                    let abs_idx = idx.unsigned_abs() as usize;
+                    if abs_idx > notebook.cells.len() {
+                        bail!(
+                            "Negative index {} out of range (notebook has {} cells)",
+                            idx,
+                            notebook.cells.len()
+                        );
+                    }
+                    notebook.cells.len() - abs_idx
+                } else {
+                    let pos_idx = idx as usize;
+                    if pos_idx > notebook.cells.len() {
+                        bail!(
+                            "Index {} out of range (notebook has {} cells)",
+                            idx,
+                            notebook.cells.len()
+                        );
+                    }
+                    pos_idx
                 }
-                CellId::new(id).map_err(|e| anyhow::anyhow!("Invalid cell ID: {}", e))?
+            } else if let Some(ref after_id) = args.after {
+                let (index, _) = common::find_cell_by_id(&notebook.cells, after_id)?;
+                index + 1
+            } else if let Some(ref before_id) = args.before {
+                let (index, _) = common::find_cell_by_id(&notebook.cells, before_id)?;
+                index
             } else {
-                CellId::from(Uuid::new_v4())
+                notebook.cells.len()
             };
 
-            let cell_type_str = cell_type_to_str(&parsed.cell_type);
-            let metadata = parsed.metadata.unwrap_or_else(create_empty_metadata);
-            let new_cell =
-                create_cell(parsed.cell_type, cell_id.clone(), metadata, parsed.source);
+            let mut added_cells: Vec<AddedCellInfo> = Vec::new();
 
-            let actual_index = insert_index + i;
-            notebook.cells.insert(actual_index, new_cell);
+            for (i, parsed) in parsed_cells.into_iter().enumerate() {
+                let cell_id = if let Some(ref id) = args.id {
+                    if notebook.cells.iter().any(|c| c.id().as_str() == *id) {
+                        bail!("Cell ID '{}' already exists in notebook", id);
+                    }
+                    CellId::new(id).map_err(|e| anyhow::anyhow!("Invalid cell ID: {}", e))?
+                } else {
+                    CellId::from(Uuid::new_v4())
+                };
 
-            added_cells.push(AddedCellInfo {
-                cell_type: cell_type_str.to_string(),
-                cell_id: cell_id.to_string(),
-                index: actual_index,
-            });
-        }
+                let cell_type_str = cell_type_to_str(&parsed.cell_type);
+                let metadata = parsed.metadata.unwrap_or_else(create_empty_metadata);
+                let new_cell =
+                    create_cell(parsed.cell_type, cell_id.clone(), metadata, parsed.source);
 
-        let format = if args.json {
-            OutputFormat::Json
-        } else {
-            OutputFormat::Text
-        };
-        output_results(file_path, added_cells, notebook.cells.len(), &format)?;
+                let actual_index = insert_index + i;
+                notebook.cells.insert(actual_index, new_cell);
 
-        Ok(())
-    })
-    .await
+                added_cells.push(AddedCellInfo {
+                    cell_type: cell_type_str.to_string(),
+                    cell_id: cell_id.to_string(),
+                    index: actual_index,
+                });
+            }
+
+            Ok((file_path.to_string(), added_cells, notebook.cells.len()))
+        })
+        .await?;
+
+    let format = if args.json {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Text
+    };
+    output_results(&file_path, added_cells, total_cells, &format)
 }
 
 fn execute_file_based(args: AddCellArgs) -> Result<()> {
