@@ -754,21 +754,36 @@ mod kernel_output_collector_tests {
 
     #[test]
     fn deferred_clear_flushed_by_each_output_kind() {
-        for flusher in [
-            execute_result(1, "42"),
-            display_data("img"),
-            error("E", "v"),
-        ] {
+        type IsExpected = fn(&nbformat::v4::Output) -> bool;
+        let cases: [(JupyterMessageContent, &str, IsExpected); 3] = [
+            (execute_result(1, "42"), "execute_result", |o| {
+                matches!(o, nbformat::v4::Output::ExecuteResult(_))
+            }),
+            (display_data("img"), "display_data", |o| {
+                matches!(o, nbformat::v4::Output::DisplayData(_))
+            }),
+            (error("E", "v"), "error", |o| {
+                matches!(o, nbformat::v4::Output::Error(_))
+            }),
+        ];
+        for (flusher, label, is_expected) in cases {
             let result = collect(vec![
                 stream(Stdio::Stdout, "stale"),
                 clear(true),
                 flusher,
                 status(ExecutionState::Idle),
             ]);
-            assert_eq!(result.outputs.len(), 1, "stale output should be dropped");
+            assert_eq!(
+                result.outputs.len(),
+                1,
+                "{}: stale output should be dropped",
+                label
+            );
             assert!(
-                !matches!(&result.outputs[0], nbformat::v4::Output::Stream { .. }),
-                "remaining output should be the flushing output, not the stale stream"
+                is_expected(&result.outputs[0]),
+                "{}: remaining output should be the flushing output, got {:?}",
+                label,
+                result.outputs[0]
             );
         }
     }
