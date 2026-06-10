@@ -386,6 +386,12 @@ impl JupyterClient {
     /// Uses POST /api/fileid/index, which only jupyter-server-documents registers.
     /// GET /api/fileid/id cannot be used: it returns 404 for unindexed paths
     /// even when the fileid extension is installed.
+    ///
+    /// jupyter-collaboration servers intentionally probe as unavailable: our
+    /// Y.js room handshake is not compatible with them, so they are served via
+    /// the Contents API path instead. The probe indexes a junk "probe" path as
+    /// a side effect; jupyter-server-documents' default ArbitraryFileIdManager
+    /// accepts paths that don't exist on disk (verified against 0.2.2).
     pub async fn probe_ydoc(&self) -> Result<bool> {
         let url = format!("{}/api/fileid/index", self.base_url);
         let response = self
