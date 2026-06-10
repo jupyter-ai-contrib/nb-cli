@@ -258,9 +258,10 @@ pub fn resolve_execution_mode(
     }
 }
 
-/// Resolve ydoc_available from saved connection config.
-/// Returns None for ad-hoc --server/--token (caller should try Y.js and fall back).
-/// Returns Some(bool) from saved connection's probe result.
+/// Resolve cached ydoc_available from saved connection config.
+/// Returns None for ad-hoc --server/--token connections and for saved
+/// connections without a cached probe result; `resolve_ydoc_with_probe`
+/// then probes the server live.
 pub fn resolve_ydoc_available(
     server_arg: &Option<String>,
     token_arg: &Option<String>,
@@ -298,14 +299,12 @@ pub async fn resolve_ydoc_with_probe(
 
 /// Read-modify-save a notebook via the Contents API.
 /// Handles: extract credentials, normalize path, fetch notebook, call `mutate`, save back.
-/// The closure receives (&mut Notebook, &normalized_file_path).
-pub async fn with_contents_api<F>(
-    file: &str,
-    mode: &ExecutionMode,
-    mutate: F,
-) -> Result<()>
+/// The closure receives (&mut Notebook, &normalized_file_path) and returns a
+/// value that is handed back to the caller only after the save succeeds, so
+/// callers report results only for persisted mutations.
+pub async fn with_contents_api<F, T>(file: &str, mode: &ExecutionMode, mutate: F) -> Result<T>
 where
-    F: FnOnce(&mut nbformat::v4::Notebook, &str) -> Result<()>,
+    F: FnOnce(&mut nbformat::v4::Notebook, &str) -> Result<T>,
 {
     let (server_url, token) = match mode {
         ExecutionMode::Remote { server_url, token } => (server_url.clone(), token.clone()),
@@ -316,21 +315,20 @@ where
     let server_root = resolve_server_root();
     let notebook_server_path = notebook_path_for_server(&file_path, server_root.as_deref());
 
-    let client =
-        crate::execution::remote::client::JupyterClient::new(server_url, token)?;
+    let client = crate::execution::remote::client::JupyterClient::new(server_url, token)?;
     let mut notebook = client
         .get_notebook(&notebook_server_path)
         .await
         .context("Failed to read notebook from server")?;
 
-    mutate(&mut notebook, &file_path)?;
+    let result = mutate(&mut notebook, &file_path)?;
 
     client
         .save_notebook(&notebook_server_path, &notebook)
         .await
         .context("Failed to save notebook to server")?;
 
-    Ok(())
+    Ok(result)
 }
 
 /// Get the Jupyter server root directory from saved connection config.

@@ -132,7 +132,7 @@ async fn execute_with_contents_api(
     mode: crate::execution::types::ExecutionMode,
 ) -> Result<()> {
     let file = args.file.clone();
-    common::with_contents_api(&file, &mode, |notebook, file_path| {
+    let result = common::with_contents_api(&file, &mode, |notebook, file_path| {
         let cells_cleared = if let Some(ref cell_id) = args.cell {
             let (_, cell) = common::find_cell_by_id_mut(&mut notebook.cells, cell_id)?;
             clear_cell_output(cell, args.keep_execution_count)?;
@@ -152,22 +152,20 @@ async fn execute_with_contents_api(
             count
         };
 
-        let result = ClearOutputsResult {
+        Ok(ClearOutputsResult {
             file: file_path.to_string(),
             cells_cleared,
             execution_counts_cleared: !args.keep_execution_count,
-        };
-
-        let format = if args.json {
-            OutputFormat::Json
-        } else {
-            OutputFormat::Text
-        };
-        output_result(&result, &format)?;
-
-        Ok(())
+        })
     })
-    .await
+    .await?;
+
+    let format = if args.json {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Text
+    };
+    output_result(&result, &format)
 }
 
 fn execute_file_based(args: ClearOutputsArgs) -> Result<()> {
