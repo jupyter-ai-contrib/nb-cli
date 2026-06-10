@@ -244,6 +244,20 @@ impl RemoteExecutor {
                 continue;
             }
 
+            // Apply a deferred clear_output(wait=True) when the next output arrives
+            if clear_pending
+                && matches!(
+                    msg.content,
+                    JupyterMessageContent::StreamContent(_)
+                        | JupyterMessageContent::ExecuteResult(_)
+                        | JupyterMessageContent::DisplayData(_)
+                        | JupyterMessageContent::ErrorOutput(_)
+                )
+            {
+                outputs.clear();
+                clear_pending = false;
+            }
+
             match msg.content {
                 JupyterMessageContent::Status(status)
                     if matches!(
@@ -254,10 +268,6 @@ impl RemoteExecutor {
                     break;
                 }
                 JupyterMessageContent::StreamContent(stream) => {
-                    if clear_pending {
-                        outputs.clear();
-                        clear_pending = false;
-                    }
                     let name = match stream.name {
                         jupyter_protocol::Stdio::Stdout => "stdout".to_string(),
                         jupyter_protocol::Stdio::Stderr => "stderr".to_string(),
@@ -292,10 +302,6 @@ impl RemoteExecutor {
                     }
                 }
                 JupyterMessageContent::ExecuteResult(result) => {
-                    if clear_pending {
-                        outputs.clear();
-                        clear_pending = false;
-                    }
                     execution_count = Some(result.execution_count.value() as i64);
                     let json = serde_json::json!({
                         "output_type": "execute_result",
@@ -311,10 +317,6 @@ impl RemoteExecutor {
                     }
                 }
                 JupyterMessageContent::DisplayData(display) => {
-                    if clear_pending {
-                        outputs.clear();
-                        clear_pending = false;
-                    }
                     let json = serde_json::json!({
                         "output_type": "display_data",
                         "data": display.data,
@@ -328,10 +330,6 @@ impl RemoteExecutor {
                     }
                 }
                 JupyterMessageContent::ErrorOutput(error) => {
-                    if clear_pending {
-                        outputs.clear();
-                        clear_pending = false;
-                    }
                     error_info = Some(ExecutionError {
                         ename: error.ename.clone(),
                         evalue: error.evalue.clone(),
