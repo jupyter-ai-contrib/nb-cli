@@ -435,9 +435,10 @@ mod tests {
 
     /// Minimal Contents API stub: serves GET with a valid one-cell notebook and
     /// answers PUT with the given status, recording every PUT body.
-    /// Note: with_contents_api also calls Config::load() from the process cwd;
-    /// the crate root has no .jupyter/cli.json, so server root resolves to None
-    /// and the request path is the file name as given.
+    /// Note: with_contents_api also calls Config::load() from the process cwd,
+    /// which may pick up a developer-local ./.jupyter/cli.json and change the
+    /// request path; the tests are insulated because this stub ignores the
+    /// request path entirely.
     async fn contents_api_stub(put_status: u16) -> ContentsStub {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
