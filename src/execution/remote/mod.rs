@@ -830,3 +830,69 @@ mod kernel_output_collector_tests {
         assert_eq!(result.outputs.len(), 2);
     }
 }
+
+#[cfg(test)]
+mod kernel_ws_execute_tests {
+    use super::*;
+
+    /// A server that completes the v1-subprotocol handshake and then goes
+    /// silent must trip the per-cell deadline, not hang.
+    #[tokio::test]
+    async fn execute_times_out_when_kernel_never_responds() {
+        use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let _ws = tokio_tungstenite::accept_hdr_async(
+                    stream,
+                    |_req: &Request, mut resp: Response| {
+                        resp.headers_mut().insert(
+                            "Sec-WebSocket-Protocol",
+                            "v1.kernel.websocket.jupyter.org".parse().unwrap(),
+                        );
+                        Ok(resp)
+                    },
+                )
+                .await;
+                // Hold the connection open without ever sending a message
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            }
+        });
+
+        let ws = KernelWebSocket::connect(&format!("ws://{}/api/kernels/k/channels", addr))
+            .await
+            .unwrap();
+
+        let mut executor = RemoteExecutor {
+            config: ExecutionConfig {
+                timeout: std::time::Duration::from_millis(300),
+                ..Default::default()
+            },
+            server_url: format!("http://{}", addr),
+            token: "t".to_string(),
+            client: None,
+            session: None,
+            ws: Some(ws),
+            ydoc: None,
+            created_session: false,
+        };
+
+        let started = tokio::time::Instant::now();
+        let err = match executor.execute_code_kernel_ws("1 + 1", None, None).await {
+            Ok(_) => panic!("execution must time out when the kernel never responds"),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string().contains("timed out"),
+            "unexpected error: {}",
+            err
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "timeout must fire promptly, took {:?}",
+            started.elapsed()
+        );
+    }
+}
