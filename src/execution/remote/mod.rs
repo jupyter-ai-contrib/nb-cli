@@ -224,7 +224,12 @@ impl RemoteExecutor {
         loop {
             let msg = match tokio::time::timeout_at(deadline, ws.recv_message()).await {
                 Ok(Ok(Some(msg))) => msg,
-                Ok(Ok(None)) => break,
+                // A closed socket before idle means we cannot know whether the
+                // cell completed; reporting success with empty outputs would
+                // make a dropped connection look like a no-output cell.
+                Ok(Ok(None)) => {
+                    anyhow::bail!("Kernel WebSocket closed before execution completed")
+                }
                 Ok(Err(e)) => return Err(e).context("WebSocket error"),
                 Err(_) => anyhow::bail!("Cell execution timed out after {:?}", self.config.timeout),
             };
@@ -893,6 +898,66 @@ mod kernel_ws_execute_tests {
             started.elapsed() < std::time::Duration::from_secs(5),
             "timeout must fire promptly, took {:?}",
             started.elapsed()
+        );
+    }
+
+    /// A connection dropped before idle must surface as an error, not as a
+    /// successful execution with empty outputs.
+    #[tokio::test]
+    async fn execute_errors_when_connection_drops_before_idle() {
+        use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let ws = tokio_tungstenite::accept_hdr_async(
+                    stream,
+                    |_req: &Request, mut resp: Response| {
+                        resp.headers_mut().insert(
+                            "Sec-WebSocket-Protocol",
+                            "v1.kernel.websocket.jupyter.org".parse().unwrap(),
+                        );
+                        Ok(resp)
+                    },
+                )
+                .await;
+                drop(ws);
+            }
+        });
+
+        let ws = KernelWebSocket::connect(&format!("ws://{}/api/kernels/k/channels", addr))
+            .await
+            .unwrap();
+
+        let mut executor = RemoteExecutor {
+            config: ExecutionConfig {
+                timeout: std::time::Duration::from_secs(10),
+                ..Default::default()
+            },
+            server_url: format!("http://{}", addr),
+            token: "t".to_string(),
+            client: None,
+            session: None,
+            ws: Some(ws),
+            ydoc: None,
+            created_session: false,
+        };
+
+        let err = match executor.execute_code_kernel_ws("1 + 1", None, None).await {
+            Ok(r) => panic!(
+                "dropped connection must not report success (got success={}, outputs={})",
+                r.success,
+                r.outputs.len()
+            ),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string()
+                .contains("closed before execution completed")
+                || err.to_string().contains("WebSocket error"),
+            "unexpected error: {}",
+            err
         );
     }
 }
