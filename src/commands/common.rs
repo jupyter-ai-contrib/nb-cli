@@ -427,12 +427,25 @@ mod tests {
         assert_eq!(super::unescape_string("\\n\\t\\r"), "\n\t\r");
     }
 
-    /// Minimal Contents API stub: serves GET with a valid empty notebook and
-    /// answers PUT with the given status. Returns the bound server URL.
-    async fn contents_api_stub(put_status: u16) -> String {
+    struct ContentsStub {
+        url: String,
+        put_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        put_bodies: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    /// Minimal Contents API stub: serves GET with a valid one-cell notebook and
+    /// answers PUT with the given status, recording every PUT body.
+    /// Note: with_contents_api also calls Config::load() from the process cwd;
+    /// the crate root has no .jupyter/cli.json, so server root resolves to None
+    /// and the request path is the file name as given.
+    async fn contents_api_stub(put_status: u16) -> ContentsStub {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        let put_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let put_bodies = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let put_count_srv = std::sync::Arc::clone(&put_count);
+        let put_bodies_srv = std::sync::Arc::clone(&put_bodies);
         tokio::spawn(async move {
             loop {
                 let Ok((mut sock, _)) = listener.accept().await else {
@@ -471,14 +484,16 @@ mod tests {
                     buf.extend_from_slice(&tmp[..n]);
                 }
                 let response = if head.starts_with("GET") {
-                    let nb =
-                        r#"{"content":{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}}"#;
+                    let nb = r#"{"content":{"cells":[{"cell_type":"code","execution_count":null,"id":"c1","metadata":{},"outputs":[],"source":["original"]}],"metadata":{},"nbformat":4,"nbformat_minor":5}}"#;
                     format!(
                         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                         nb.len(),
                         nb
                     )
                 } else {
+                    put_count_srv.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let body = String::from_utf8_lossy(&buf[body_start..]).to_string();
+                    put_bodies_srv.lock().unwrap().push(body);
                     format!(
                         "HTTP/1.1 {} X\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}",
                         put_status
@@ -488,7 +503,11 @@ mod tests {
                 let _ = sock.shutdown().await;
             }
         });
-        format!("http://{}", addr)
+        ContentsStub {
+            url: format!("http://{}", addr),
+            put_count,
+            put_bodies,
+        }
     }
 
     fn remote_mode(server_url: String) -> ExecutionMode {
@@ -499,22 +518,55 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn with_contents_api_returns_mutation_result_after_successful_save() {
-        let url = contents_api_stub(200).await;
-        let result = super::with_contents_api("test.ipynb", &remote_mode(url), |notebook, _| {
-            assert!(notebook.cells.is_empty());
-            Ok(42)
-        })
-        .await;
+    async fn with_contents_api_saves_mutated_notebook_then_returns_result() {
+        let stub = contents_api_stub(200).await;
+        let result =
+            super::with_contents_api("test.ipynb", &remote_mode(stub.url), |notebook, _| {
+                match &mut notebook.cells[0] {
+                    nbformat::v4::Cell::Code { source, .. } => {
+                        *source = vec!["mutated".to_string()]
+                    }
+                    _ => panic!("expected code cell"),
+                }
+                Ok(42)
+            })
+            .await;
         assert_eq!(result.unwrap(), 42);
+        let bodies = stub.put_bodies.lock().unwrap();
+        assert_eq!(bodies.len(), 1);
+        assert!(
+            bodies[0].contains("mutated") && !bodies[0].contains("original"),
+            "PUT body must contain the mutated notebook: {}",
+            bodies[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn with_contents_api_skips_save_when_mutation_fails() {
+        let stub = contents_api_stub(200).await;
+        let result = super::with_contents_api(
+            "test.ipynb",
+            &remote_mode(stub.url),
+            |_, _| -> anyhow::Result<i32> { anyhow::bail!("mutation rejected") },
+        )
+        .await;
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("mutation rejected"));
+        assert_eq!(
+            stub.put_count.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "a failed mutation must not be saved"
+        );
     }
 
     #[tokio::test]
     async fn with_contents_api_withholds_result_when_save_fails() {
-        let url = contents_api_stub(500).await;
+        let stub = contents_api_stub(500).await;
         let mutated = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let mutated_clone = std::sync::Arc::clone(&mutated);
-        let result = super::with_contents_api("test.ipynb", &remote_mode(url), move |_, _| {
+        let result = super::with_contents_api("test.ipynb", &remote_mode(stub.url), move |_, _| {
             mutated_clone.store(true, std::sync::atomic::Ordering::SeqCst);
             Ok(42)
         })
