@@ -194,6 +194,10 @@ impl RemoteExecutor {
                             // A closed socket yields None on every recv; without
                             // this arm the select busy-spins until the deadline
                             // and misreports the drop as a timeout.
+                            // No dedicated test: stubbing this path needs a full
+                            // y-sync handshake. The kernel-WS sibling pins the
+                            // equivalent behavior in
+                            // execute_errors_when_connection_drops_before_idle.
                             None => anyhow::bail!(
                                 "Kernel WebSocket closed before execution completed"
                             ),
