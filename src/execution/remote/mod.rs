@@ -172,23 +172,31 @@ impl RemoteExecutor {
                         );
                     }
                     kernel_msg = ws.recv_message() => {
-                        if let Some(msg) = kernel_msg? {
-                            let is_ours = msg.parent_header.as_ref()
-                                .map(|h| h.msg_id == msg_id).unwrap_or(false);
-                            if is_ours {
-                                match &msg.content {
-                                    JupyterMessageContent::ExecuteInput(input) => {
-                                        expected_ec = Some(input.execution_count.0 as i64);
-                                    }
-                                    JupyterMessageContent::Status(status) => {
-                                        if matches!(status.execution_state,
-                                            jupyter_protocol::ExecutionState::Idle) {
-                                            idle_received = true;
+                        match kernel_msg? {
+                            Some(msg) => {
+                                let is_ours = msg.parent_header.as_ref()
+                                    .map(|h| h.msg_id == msg_id).unwrap_or(false);
+                                if is_ours {
+                                    match &msg.content {
+                                        JupyterMessageContent::ExecuteInput(input) => {
+                                            expected_ec = Some(input.execution_count.0 as i64);
                                         }
+                                        JupyterMessageContent::Status(status) => {
+                                            if matches!(status.execution_state,
+                                                jupyter_protocol::ExecutionState::Idle) {
+                                                idle_received = true;
+                                            }
+                                        }
+                                        _ => {}
                                     }
-                                    _ => {}
                                 }
                             }
+                            // A closed socket yields None on every recv; without
+                            // this arm the select busy-spins until the deadline
+                            // and misreports the drop as a timeout.
+                            None => anyhow::bail!(
+                                "Kernel WebSocket closed before execution completed"
+                            ),
                         }
                     }
                     ydoc_result = ydoc.recv_update() => {
@@ -952,10 +960,14 @@ mod kernel_ws_execute_tests {
             ),
             Err(e) => e,
         };
+        // Three legitimate error paths depending on when the peer reset is
+        // observed: detected on recv (closed-before-completed), surfaced as a
+        // read error, or hit during the send itself.
         assert!(
             err.to_string()
                 .contains("closed before execution completed")
-                || err.to_string().contains("WebSocket error"),
+                || err.to_string().contains("WebSocket error")
+                || err.to_string().contains("Failed to send execute request"),
             "unexpected error: {}",
             err
         );
