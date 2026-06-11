@@ -292,3 +292,34 @@ impl KernelWebSocket {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn connect_rejects_server_without_v1_subprotocol() {
+        // accept_async completes the WebSocket handshake without echoing any
+        // subprotocol, which is how a legacy/incompatible server responds.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let _ws = tokio_tungstenite::accept_async(stream).await;
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+        });
+
+        let err = match KernelWebSocket::connect(&format!("ws://{}/api/kernels/k/channels", addr))
+            .await
+        {
+            Ok(_) => panic!("connect must fail when the server does not accept the v1 subprotocol"),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string().contains("WebSocket v1 kernel protocol"),
+            "unexpected error: {}",
+            err
+        );
+    }
+}
