@@ -333,6 +333,9 @@ mod tests {
     async fn connect_rejects_server_without_v1_subprotocol() {
         // accept_async completes the WebSocket handshake without echoing any
         // subprotocol, which is how a legacy/incompatible server responds.
+        // Note: tungstenite 0.23+ rejects missing subprotocols client-side with
+        // SubProtocolError; on a dependency bump this assertion's message check
+        // needs updating, but the rejection itself remains.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
