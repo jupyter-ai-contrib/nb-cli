@@ -18,7 +18,8 @@ pub struct JupyterConnection {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_root: Option<String>,
     /// Whether Y.js/collaboration backend is available on the server.
-    /// None means unknown (treated as true for backward compat).
+    /// None means unknown: commands probe the server live, and execution
+    /// tries Y.js with a fallback to the kernel-WS path.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ydoc_available: Option<bool>,
 }
