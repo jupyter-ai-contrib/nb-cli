@@ -426,4 +426,107 @@ mod tests {
         assert_eq!(super::unescape_string("no escapes"), "no escapes");
         assert_eq!(super::unescape_string("\\n\\t\\r"), "\n\t\r");
     }
+
+    /// Minimal Contents API stub: serves GET with a valid empty notebook and
+    /// answers PUT with the given status. Returns the bound server URL.
+    async fn contents_api_stub(put_status: u16) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 1024];
+                // Read until end of headers, then drain any body by content-length
+                let body_start = loop {
+                    let n = sock.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 {
+                        break None;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break Some(pos + 4);
+                    }
+                };
+                let Some(body_start) = body_start else {
+                    continue;
+                };
+                let head = String::from_utf8_lossy(&buf[..body_start]).to_string();
+                let content_length: usize = head
+                    .lines()
+                    .find_map(|l| {
+                        l.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|v| v.trim().parse().unwrap_or(0))
+                    })
+                    .unwrap_or(0);
+                while buf.len() - body_start < content_length {
+                    let n = sock.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                }
+                let response = if head.starts_with("GET") {
+                    let nb =
+                        r#"{"content":{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}}"#;
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        nb.len(),
+                        nb
+                    )
+                } else {
+                    format!(
+                        "HTTP/1.1 {} X\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}",
+                        put_status
+                    )
+                };
+                let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+        format!("http://{}", addr)
+    }
+
+    fn remote_mode(server_url: String) -> ExecutionMode {
+        ExecutionMode::Remote {
+            server_url,
+            token: "t".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn with_contents_api_returns_mutation_result_after_successful_save() {
+        let url = contents_api_stub(200).await;
+        let result = super::with_contents_api("test.ipynb", &remote_mode(url), |notebook, _| {
+            assert!(notebook.cells.is_empty());
+            Ok(42)
+        })
+        .await;
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[tokio::test]
+    async fn with_contents_api_withholds_result_when_save_fails() {
+        let url = contents_api_stub(500).await;
+        let mutated = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mutated_clone = std::sync::Arc::clone(&mutated);
+        let result = super::with_contents_api("test.ipynb", &remote_mode(url), move |_, _| {
+            mutated_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(42)
+        })
+        .await;
+        // The mutation ran, but a failed save must surface as an error so the
+        // caller never reports success for an unpersisted change.
+        assert!(mutated.load(std::sync::atomic::Ordering::SeqCst));
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Failed to save notebook to server"),
+            "unexpected error: {}",
+            err
+        );
+    }
 }
