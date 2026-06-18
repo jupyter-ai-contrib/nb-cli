@@ -116,10 +116,16 @@ async fn execute_async(args: ConnectArgs) -> Result<()> {
         select_server_interactive(&valid_servers)?
     };
 
-    // Probe Y.js/collaboration backend availability
-    let ydoc_available = match JupyterClient::new(selected.url.clone(), selected.token.clone()) {
-        Ok(client) => Some(client.probe_ydoc().await.unwrap_or(false)),
-        Err(_) => None,
+    // Probe Y.js/collaboration backend availability. A probe error maps to
+    // None (unknown), not Some(false): caching "direct" on a transient failure
+    // would silently route a real collaboration server to the kernel-WS path.
+    let ydoc_available = if args.skip_validation {
+        None
+    } else {
+        match JupyterClient::new(selected.url.clone(), selected.token.clone()) {
+            Ok(client) => client.probe_ydoc().await.ok(),
+            Err(_) => None,
+        }
     };
 
     // Create connection
@@ -195,11 +201,13 @@ async fn connect_manual(server_url: String, token: String, skip_validation: bool
         println!("✓ Connection validated");
     }
 
-    // Probe Y.js/collaboration backend (skip if validation is skipped)
+    // Probe Y.js/collaboration backend (skip if validation is skipped).
+    // A probe error maps to None (unknown) rather than Some(false) so a
+    // transient failure is not cached as a permanent "direct" routing.
     let ydoc_available = if skip_validation {
         None
     } else {
-        Some(client.probe_ydoc().await.unwrap_or(false))
+        client.probe_ydoc().await.ok()
     };
 
     // Create connection

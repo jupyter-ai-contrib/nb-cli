@@ -260,8 +260,9 @@ pub fn resolve_execution_mode(
 
 /// Resolve cached ydoc_available from saved connection config.
 /// Returns None for ad-hoc --server/--token connections and for saved
-/// connections without a cached probe result; `resolve_ydoc_with_probe`
-/// then probes the server live.
+/// connections without a cached probe result. None is a routing hint meaning
+/// "unknown": the executor tries Y.js and falls back to the Contents API path
+/// on the definitive backend-absent signal.
 pub fn resolve_ydoc_available(
     server_arg: &Option<String>,
     token_arg: &Option<String>,
@@ -275,25 +276,14 @@ pub fn resolve_ydoc_available(
         .and_then(|c| c.ydoc_available)
 }
 
-pub async fn resolve_ydoc_with_probe(
-    server_url: &str,
-    token: &str,
-    server_arg: &Option<String>,
-    token_arg: &Option<String>,
-) -> bool {
-    let cached = resolve_ydoc_available(server_arg, token_arg);
-    match cached {
-        Some(v) => v,
-        None => {
-            let client = crate::execution::remote::client::JupyterClient::new(
-                server_url.to_string(),
-                token.to_string(),
-            );
-            match client {
-                Ok(c) => c.probe_ydoc().await.unwrap_or(false),
-                Err(_) => false,
-            }
-        }
+/// Print the self-heal hint when a cached "collaborative" connection turns
+/// out to have no Y.js backend anymore.
+pub fn warn_stale_collab_cache(cached: Option<bool>) {
+    if cached == Some(true) {
+        eprintln!(
+            "Collaboration backend no longer found on server; using Contents API. \
+             Run 'nb connect' to refresh."
+        );
     }
 }
 

@@ -38,6 +38,13 @@ pub trait ExecutionBackend: Send {
         on_output: Option<&OutputCallback>,
     ) -> Result<ExecutionResult>;
 
+    /// Whether the server persists executed outputs itself (Y.js room
+    /// attached). When false in remote mode, the caller must save the
+    /// notebook via the Contents API after execution.
+    fn server_persists_outputs(&self) -> bool {
+        false
+    }
+
     /// Stop the backend (cleanup kernel or close session)
     async fn stop(&mut self) -> Result<()>;
 }

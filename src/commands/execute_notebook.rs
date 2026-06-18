@@ -215,13 +215,14 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         }
     };
 
-    // Resolve ydoc availability for remote mode (probe server if not cached)
+    // Cached Y.js availability is a routing hint: Some(false) skips Y.js,
+    // anything else tries Y.js and falls back inside the executor. Ad-hoc
+    // --server/--token connections carry no cache and detect via the first
+    // FileID call instead of a separate probe round trip.
     let ydoc_available = match &mode {
-        ExecutionMode::Remote {
-            server_url, token, ..
-        } => Some(
-            common::resolve_ydoc_with_probe(server_url, token, &args.server, &args.token).await,
-        ),
+        ExecutionMode::Remote { .. } => {
+            common::resolve_ydoc_available(&args.server, &args.token)
+        }
         ExecutionMode::Local => None,
     };
 
@@ -336,6 +337,9 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         }
     }
 
+    // Capture before stop(): teardown drops the Y.js connection
+    let server_persists_outputs = backend.server_persists_outputs();
+
     // Stop backend (just closes WebSocket, session persists)
     backend.stop().await?;
 
@@ -361,7 +365,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         ExecutionMode::Remote {
             server_url, token, ..
         } => {
-            if ydoc_available != Some(true) {
+            if !server_persists_outputs {
                 let client = crate::execution::remote::client::JupyterClient::new(
                     server_url.clone(),
                     token.clone(),

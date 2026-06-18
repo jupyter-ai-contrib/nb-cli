@@ -492,9 +492,13 @@ impl ExecutionBackend for RemoteExecutor {
         self.session = Some(session);
         self.ws = Some(ws);
 
-        // Connect Y.js client for observing outputs during execution (skip for vanilla servers)
-        let skip_ydoc = self.config.ydoc_available == Some(false);
-        if !skip_ydoc {
+        // Connect Y.js client for observing outputs during execution.
+        // The cached ydoc_available is a routing hint, not a gate: Some(false)
+        // skips the attempt, anything else tries Y.js and falls back to the
+        // kernel-WS path on the definitive backend-absent signal. Transient
+        // errors stay hard so a flaky collaboration server is never silently
+        // downgraded.
+        if self.config.ydoc_available != Some(false) {
             if let Some(ref notebook_path) = self.config.notebook_path {
                 match YDocClient::connect(
                     self.server_url.clone(),
@@ -506,13 +510,17 @@ impl ExecutionBackend for RemoteExecutor {
                     Ok(ydoc) => {
                         self.ydoc = Some(ydoc);
                     }
-                    Err(e) => {
-                        if self.config.ydoc_available.is_none() {
-                            eprintln!("Y.js not available, using direct kernel output: {}", e);
-                        } else {
-                            return Err(e)
-                                .context("Failed to connect Y.js client for output observation");
+                    Err(e) if ydoc::is_yjs_unavailable(&e) => {
+                        if self.config.ydoc_available == Some(true) {
+                            eprintln!(
+                                "Collaboration backend no longer found on server; \
+                                 using direct kernel output. Run 'nb connect' to refresh."
+                            );
                         }
+                    }
+                    Err(e) => {
+                        return Err(e)
+                            .context("Failed to connect Y.js client for output observation");
                     }
                 }
             }
@@ -534,6 +542,12 @@ impl ExecutionBackend for RemoteExecutor {
         } else {
             self.execute_code_kernel_ws(code, cell_id, on_output).await
         }
+    }
+
+    fn server_persists_outputs(&self) -> bool {
+        // With a Y.js room attached, the server observes and saves outputs
+        // itself; without one the caller must persist via the Contents API.
+        self.ydoc.is_some()
     }
 
     async fn stop(&mut self) -> Result<()> {

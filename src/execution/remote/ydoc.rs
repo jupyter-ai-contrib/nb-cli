@@ -50,10 +50,29 @@ struct FileIdResponse {
     id: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct CollabSessionResponse {
-    #[serde(rename = "fileId")]
-    file_id: String,
+/// Definitive signal that the server has no compatible Y.js backend: the
+/// FileID index endpoint (registered only by jupyter-server-documents) is
+/// absent. Callers route to the Contents API path on this error; any other
+/// failure (network, 5xx) is transient and must surface as a real error so a
+/// flaky collaboration server is never silently downgraded.
+#[derive(Debug)]
+pub struct YjsUnavailable;
+
+impl std::fmt::Display for YjsUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "server has no Y.js collaboration backend (FileID index endpoint not found)"
+        )
+    }
+}
+
+impl std::error::Error for YjsUnavailable {}
+
+/// True when the error chain contains the definitive backend-absent marker.
+pub fn is_yjs_unavailable(e: &anyhow::Error) -> bool {
+    e.chain()
+        .any(|c| c.downcast_ref::<YjsUnavailable>().is_some())
 }
 
 /// Y.js document client for syncing notebook changes with Jupyter Server
@@ -100,12 +119,15 @@ impl YDocClient {
         }
     }
 
-    /// Get unique file ID for notebook path via FileID API.
-    /// Tries jupyter-server-documents first, falls back to jupyter-collaboration session endpoint.
+    /// Get unique file ID for notebook path via POST /api/fileid/index
+    /// (registered only by jupyter-server-documents, create-if-not-exists).
+    /// A 404 means the backend is absent and returns [`YjsUnavailable`] so
+    /// callers can fall back to the Contents API path. jupyter-collaboration
+    /// is intentionally not detected here: its room protocol is not compatible
+    /// with this client (see #95 for full support).
     async fn get_file_id(server_url: &str, token: &str, notebook_path: &str) -> Result<String> {
         let http_client = HttpClient::new();
 
-        // Try jupyter-server-documents: POST /api/fileid/index (create-if-not-exists)
         let index_url = format!("{}/api/fileid/index", server_url);
         let response = http_client
             .post(&index_url)
@@ -133,49 +155,14 @@ impl YDocClient {
             return Ok(file_id_response.id);
         }
 
-        if response.status().as_u16() != 404 {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "FileID API request failed with status {}: {}",
-                status,
-                error_text
-            );
-        }
-
-        // Fallback: try jupyter-collaboration session endpoint (indexes the file if needed)
-        let mut session_url = Url::parse(server_url).context("Invalid server URL")?;
-        session_url.set_path(&format!("/api/collaboration/session/{}", notebook_path));
-        let response = http_client
-            .put(session_url)
-            .header("Authorization", format!("token {}", token))
-            .header("Content-Type", "application/json")
-            .body(r#"{"format":"json","type":"notebook"}"#)
-            .send()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to call collaboration session API: {}", e))?;
-
-        if response.status().is_success() {
-            let session_response: CollabSessionResponse = response
-                .json()
-                .await
-                .context("Failed to parse collaboration session response")?;
-            return Ok(session_response.file_id);
+        if response.status().as_u16() == 404 {
+            return Err(anyhow::Error::new(YjsUnavailable));
         }
 
         let status = response.status();
         let error_text = response.text().await.unwrap_or_default();
-        if status.as_u16() == 404 {
-            anyhow::bail!(
-                "FileID API request failed with status {}: {}. \
-                 Make sure jupyter-server-documents or jupyter-collaboration is installed: \
-                 pip install jupyter-server-documents (or pip install jupyter-collaboration)",
-                status,
-                error_text
-            );
-        }
         anyhow::bail!(
-            "Collaboration session API request failed with status {}: {}",
+            "FileID API request failed with status {}: {}",
             status,
             error_text
         );
@@ -570,5 +557,91 @@ impl YDocClient {
             .await
             .context("Failed to close WebSocket")?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod fileid_classification_tests {
+    use super::{is_yjs_unavailable, YDocClient, YjsUnavailable};
+    use anyhow::{anyhow, Context};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// Minimal stub for POST /api/fileid/index: drains the request and replies
+    /// with the given status. For 200 it returns a valid FileID body.
+    async fn fileid_stub(status: u16) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut tmp = [0u8; 1024];
+                let _ = sock.read(&mut tmp).await;
+                let body = if status == 200 {
+                    r#"{"id":"file-123","path":"n.ipynb"}"#
+                } else {
+                    "{}"
+                };
+                let resp = format!(
+                    "HTTP/1.1 {} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status,
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+        format!("http://{}", addr)
+    }
+
+    #[tokio::test]
+    async fn get_file_id_returns_id_on_success() {
+        let url = fileid_stub(200).await;
+        let id = YDocClient::get_file_id(&url, "t", "n.ipynb").await.unwrap();
+        assert_eq!(id, "file-123");
+    }
+
+    #[tokio::test]
+    async fn get_file_id_signals_yjs_unavailable_on_404() {
+        let url = fileid_stub(404).await;
+        let err = YDocClient::get_file_id(&url, "t", "n.ipynb")
+            .await
+            .unwrap_err();
+        assert!(
+            is_yjs_unavailable(&err),
+            "404 must classify as YjsUnavailable, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn get_file_id_is_hard_error_on_500() {
+        // A transient server error must NOT be treated as backend-absent,
+        // otherwise a flaky collaboration server would be silently downgraded.
+        let url = fileid_stub(500).await;
+        let err = YDocClient::get_file_id(&url, "t", "n.ipynb")
+            .await
+            .unwrap_err();
+        assert!(
+            !is_yjs_unavailable(&err),
+            "500 must be a hard error, not YjsUnavailable, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn is_yjs_unavailable_finds_marker_directly_and_through_context() {
+        let direct = anyhow!(YjsUnavailable);
+        assert!(is_yjs_unavailable(&direct));
+
+        let wrapped = Err::<(), _>(anyhow!(YjsUnavailable))
+            .context("Error adding cells")
+            .unwrap_err();
+        assert!(
+            is_yjs_unavailable(&wrapped),
+            "marker must be found through a context() layer"
+        );
+
+        let unrelated = anyhow!("connection refused");
+        assert!(!is_yjs_unavailable(&unrelated));
     }
 }

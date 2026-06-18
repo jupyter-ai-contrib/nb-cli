@@ -43,13 +43,21 @@ pub struct ReadArgs {
     /// Show only markdown cells
     #[arg(long = "only-markdown", alias = "markdown-cells", conflicts_with_all = ["cell", "cell_index", "only_code"])]
     pub only_markdown: bool,
+
+    /// Jupyter server URL (read from server instead of local filesystem)
+    #[arg(long)]
+    pub server: Option<String>,
+
+    /// Authentication token for Jupyter server
+    #[arg(long)]
+    pub token: Option<String>,
 }
 
 pub fn execute(args: ReadArgs) -> Result<()> {
     let file_path = common::normalize_notebook_path(&args.file);
 
-    // Read from server when connected, otherwise from local filesystem
-    let mode = common::resolve_execution_mode(None, None)?;
+    // Read from server when connected (or given --server/--token), else local
+    let mode = common::resolve_execution_mode(args.server.clone(), args.token.clone())?;
     let notebook = match &mode {
         crate::execution::types::ExecutionMode::Remote { server_url, token } => {
             let server_root = common::resolve_server_root();
