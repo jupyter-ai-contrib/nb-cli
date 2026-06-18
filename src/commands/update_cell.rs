@@ -5,7 +5,7 @@ use clap::Parser;
 use nbformat::v4::Cell;
 use serde::Serialize;
 
-#[derive(Parser)]
+#[derive(Parser, Clone)]
 pub struct UpdateCellArgs {
     /// Path to notebook file
     pub file: String,
@@ -88,25 +88,33 @@ pub fn execute(args: UpdateCellArgs) -> Result<()> {
 
     match &mode {
         ExecutionMode::Local => execute_file_based(args),
-        ExecutionMode::Remote {
-            ref server_url,
-            ref token,
-        } => {
+        ExecutionMode::Remote { .. } => {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            let ydoc = runtime.block_on(common::resolve_ydoc_with_probe(
-                server_url,
-                token,
-                &args.server,
-                &args.token,
-            ));
-            if ydoc {
-                runtime.block_on(execute_with_realtime(args, mode))
-            } else {
-                runtime.block_on(execute_with_contents_api(args, mode))
-            }
+            runtime.block_on(execute_remote(args, mode))
         }
+    }
+}
+
+/// Remote dispatch: cached Some(false) goes straight to the Contents API;
+/// otherwise try the Y.js realtime path and fall back on the definitive
+/// backend-absent signal. Transient errors propagate so a flaky
+/// collaboration server is never silently downgraded.
+async fn execute_remote(
+    args: UpdateCellArgs,
+    mode: crate::execution::types::ExecutionMode,
+) -> Result<()> {
+    let cached = common::resolve_ydoc_available(&args.server, &args.token);
+    if cached == Some(false) {
+        return execute_with_contents_api(args, mode).await;
+    }
+    match execute_with_realtime(args.clone(), mode.clone()).await {
+        Err(e) if crate::execution::remote::ydoc::is_yjs_unavailable(&e) => {
+            common::warn_stale_collab_cache(cached);
+            execute_with_contents_api(args, mode).await
+        }
+        result => result,
     }
 }
 
