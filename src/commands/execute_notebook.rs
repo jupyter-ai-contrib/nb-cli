@@ -220,9 +220,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     // --server/--token connections carry no cache and detect via the first
     // FileID call instead of a separate probe round trip.
     let ydoc_available = match &mode {
-        ExecutionMode::Remote { .. } => {
-            common::resolve_ydoc_available(&args.server, &args.token)
-        }
+        ExecutionMode::Remote { .. } => common::resolve_ydoc_available(&args.server, &args.token),
         ExecutionMode::Local => None,
     };
 
