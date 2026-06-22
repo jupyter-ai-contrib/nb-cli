@@ -50,11 +50,18 @@ struct FileIdResponse {
     id: String,
 }
 
-/// Definitive signal that the server has no compatible Y.js backend: the
-/// FileID index endpoint (registered only by jupyter-server-documents) is
-/// absent. Callers route to the Contents API path on this error; any other
-/// failure (network, 5xx) is transient and must surface as a real error so a
-/// flaky collaboration server is never silently downgraded.
+#[derive(Debug, Deserialize)]
+struct CollabSessionResponse {
+    #[serde(rename = "fileId")]
+    file_id: String,
+}
+
+/// Definitive signal that the server has no compatible Y.js backend: neither
+/// the FileID index endpoint (jupyter-server-documents) nor the collaboration
+/// session endpoint (jupyter-collaboration) is present. Callers route to the
+/// Contents API path on this error; any other failure (network, 5xx) is
+/// transient and must surface as a real error so a flaky collaboration server
+/// is never silently downgraded.
 #[derive(Debug)]
 pub struct YjsUnavailable;
 
@@ -119,12 +126,15 @@ impl YDocClient {
         }
     }
 
-    /// Get unique file ID for notebook path via POST /api/fileid/index
-    /// (registered only by jupyter-server-documents, create-if-not-exists).
-    /// A 404 means the backend is absent and returns [`YjsUnavailable`] so
-    /// callers can fall back to the Contents API path. jupyter-collaboration
-    /// is intentionally not detected here: its room protocol is not compatible
-    /// with this client (see #95 for full support).
+    /// Resolve the Y.js file ID for a notebook, trying both backends.
+    ///
+    /// First POST /api/fileid/index (registered only by jupyter-server-documents,
+    /// create-if-not-exists). On a 404 there, fall back to
+    /// /api/collaboration/session (jupyter-collaboration). If both are absent
+    /// (404), return [`YjsUnavailable`] so callers fall back to the Contents API
+    /// path. A non-404 from either endpoint is transient and stays a hard error,
+    /// so a flaky collaboration server is never silently downgraded. (#95 extends
+    /// the collaboration-session branch for full jupyter-collaboration support.)
     async fn get_file_id(server_url: &str, token: &str, notebook_path: &str) -> Result<String> {
         let http_client = HttpClient::new();
 
@@ -155,6 +165,41 @@ impl YDocClient {
             return Ok(file_id_response.id);
         }
 
+        if response.status().as_u16() != 404 {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "FileID API request failed with status {}: {}",
+                status,
+                error_text
+            );
+        }
+
+        // jupyter-server-documents is absent. Fall back to the
+        // jupyter-collaboration session endpoint, which indexes the file if
+        // needed and returns its fileId.
+        let mut session_url = Url::parse(server_url).context("Invalid server URL")?;
+        session_url.set_path(&format!("/api/collaboration/session/{}", notebook_path));
+        let response = http_client
+            .put(session_url)
+            .header("Authorization", format!("token {}", token))
+            .header("Content-Type", "application/json")
+            .body(r#"{"format":"json","type":"notebook"}"#)
+            .send()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to call collaboration session API: {}", e))?;
+
+        if response.status().is_success() {
+            let session_response: CollabSessionResponse = response
+                .json()
+                .await
+                .context("Failed to parse collaboration session response")?;
+            return Ok(session_response.file_id);
+        }
+
+        // Neither backend answered. A 404 is the definitive backend-absent
+        // signal: return YjsUnavailable so callers use the Contents API. Any
+        // other status is transient and stays a hard error.
         if response.status().as_u16() == 404 {
             return Err(anyhow::Error::new(YjsUnavailable));
         }
@@ -162,7 +207,7 @@ impl YDocClient {
         let status = response.status();
         let error_text = response.text().await.unwrap_or_default();
         anyhow::bail!(
-            "FileID API request failed with status {}: {}",
+            "Collaboration session API request failed with status {}: {}",
             status,
             error_text
         );
@@ -566,13 +611,16 @@ mod fileid_classification_tests {
     use anyhow::{anyhow, Context};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    /// Minimal stub for POST /api/fileid/index: drains the request and replies
-    /// with the given status. For 200 it returns a valid FileID body.
+    /// Minimal stub that replies to every request with the given status.
+    /// get_file_id may hit two endpoints (fileid/index, then
+    /// collaboration/session), each a fresh connection, so the stub serves
+    /// repeated connections rather than a single one. For 200 it returns a
+    /// valid FileID body.
     async fn fileid_stub(status: u16) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
-            if let Ok((mut sock, _)) = listener.accept().await {
+            while let Ok((mut sock, _)) = listener.accept().await {
                 let mut tmp = [0u8; 1024];
                 let _ = sock.read(&mut tmp).await;
                 let body = if status == 200 {
@@ -602,6 +650,8 @@ mod fileid_classification_tests {
 
     #[tokio::test]
     async fn get_file_id_signals_yjs_unavailable_on_404() {
+        // Both fileid/index and the collaboration/session fallback 404 (vanilla
+        // server), so the terminal classification must be YjsUnavailable.
         let url = fileid_stub(404).await;
         let err = YDocClient::get_file_id(&url, "t", "n.ipynb")
             .await
