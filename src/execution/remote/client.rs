@@ -387,10 +387,10 @@ impl JupyterClient {
     /// GET /api/fileid/id cannot be used: it returns 404 for unindexed paths
     /// even when the fileid extension is installed.
     ///
-    /// jupyter-collaboration servers intentionally probe as unavailable: our
-    /// Y.js room handshake is not compatible with them today, so they are
-    /// served via the Contents API path. The collab-session fallback in
-    /// ydoc.rs `get_file_id` is kept for when a compatible handshake lands.
+    /// This probe checks only fileid/index, so jupyter-collaboration servers
+    /// (which 404 it) are cached Some(false) and served via the Contents API
+    /// path. ydoc.rs `get_file_id` keeps a separate collaboration/session
+    /// fallback that #95 extends for full jupyter-collaboration support.
     ///
     /// Probes with the server root path, which always exists, so the index
     /// call is idempotent and creates no record for a fake path. Verified
