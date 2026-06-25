@@ -53,6 +53,18 @@ nb execute notebook.ipynb --cell "cell-id" --restart-kernel
 
 Prefer `nb connect` plus saved connection state for remote work. Do not put Jupyter authentication tokens in commands, prompts, logs, or examples; if a manual server connection is required, ask the user to establish it. `--restart-kernel` is remote-mode only.
 
+## Kernel Gateway
+
+```bash
+nb execute notebook.ipynb --gateway http://gateway:8888 --gateway-token "$KG_TOKEN"
+nb execute notebook.ipynb --gateway http://gateway:8888 --gateway-token "$KG_TOKEN" --kernel-id <id>
+nb execute notebook.ipynb --gateway http://gateway:8888 --gateway-token "$KG_TOKEN" --gateway-auth-scheme Bearer
+```
+
+Use `--gateway` for environments that expose only a Jupyter Kernel Gateway — kernels over REST and WebSocket, with no full notebook server. The notebook is read and written locally; only execution runs on the gateway. `--gateway-token` is required when `--gateway` is set. If no `--kernel-id` is given, `nb` reuses an existing kernel on the gateway when listing is permitted, otherwise it starts a new one. Default auth scheme is `token`; override with `--gateway-auth-scheme` only when the gateway requires another scheme.
+
+Do not put gateway tokens into commands, prompts, logs, or examples. Source them from environment variables or saved configuration; if the token is not available through those channels, ask the user to run the command themselves.
+
 ## Debugging Failed Cells
 
 1. Run `nb search notebook.ipynb --with-errors`.

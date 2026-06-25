@@ -51,7 +51,7 @@ pub struct ExecuteNotebookArgs {
     pub token: Option<String>,
 
     /// Kernel gateway URL (enables remote-kernel mode, e.g. http://host:8888)
-    #[arg(long, conflicts_with = "server")]
+    #[arg(long, conflicts_with = "server", requires = "gateway_token")]
     pub gateway: Option<String>,
 
     /// Authentication token for kernel gateway
@@ -126,7 +126,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
         let token = args
             .gateway_token
             .clone()
-            .context("Must specify --gateway-token when using --gateway")?;
+            .expect("--gateway-token is required when --gateway is set");
         ExecutionMode::RemoteKernel {
             gateway_url,
             token,

@@ -1,6 +1,6 @@
 ---
 name: notebook-cli
-description: Use the `nb` CLI for all Jupyter notebook (`.ipynb`) operations, including reading, inspecting, creating, editing cells, deleting cells, clearing outputs, searching, executing, and working with connected JupyterLab sessions. Required when an agent needs deterministic notebook manipulation without directly reading or writing raw notebook JSON.
+description: Use the `nb` CLI for all Jupyter notebook (`.ipynb`) operations, including reading, inspecting, creating, editing cells, deleting cells, clearing outputs, searching, executing, and working with connected JupyterLab sessions or remote kernel gateways. Required when an agent needs deterministic notebook manipulation without directly reading or writing raw notebook JSON.
 ---
 
 # Notebook CLI
