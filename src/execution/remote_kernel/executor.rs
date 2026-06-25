@@ -49,51 +49,101 @@ impl RemoteKernelExecutor {
 
     async fn discover_kernel_id(&self) -> Result<String> {
         let url = format!("{}/api/kernels", self.gateway_url.trim_end_matches('/'));
-        let poll_interval = std::time::Duration::from_millis(500);
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(180);
+        let response = self
+            .http_client
+            .get(&url)
+            .header("Authorization", self.auth_header())
+            .send()
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to connect to kernel gateway at {}. Check that the URL is reachable.",
+                    self.gateway_url
+                )
+            })?;
 
-        loop {
-            let response = self
-                .http_client
-                .get(&url)
-                .header("Authorization", self.auth_header())
-                .send()
-                .await
-                .context("Failed to connect to kernel gateway")?;
-
-            if !response.status().is_success() {
-                anyhow::bail!(
-                    "Gateway returned status {} for GET /api/kernels",
-                    response.status()
-                );
+        let status = response.status();
+        if !status.is_success() {
+            match status.as_u16() {
+                401 | 403 => anyhow::bail!(
+                    "Gateway rejected authentication ({}). Check --gateway-token and --gateway-auth-scheme.",
+                    status
+                ),
+                404 => anyhow::bail!(
+                    "Gateway endpoint /api/kernels not found ({}). Check that --gateway points to a Jupyter Kernel Gateway.",
+                    status
+                ),
+                _ => anyhow::bail!("Gateway returned status {} for GET /api/kernels", status),
             }
-
-            let kernels: Vec<GatewayKernel> = response
-                .json()
-                .await
-                .context("Failed to parse kernel list from gateway")?;
-
-            if let Some(kernel) = kernels.into_iter().next() {
-                return Ok(kernel.id);
-            }
-
-            if tokio::time::Instant::now() > deadline {
-                anyhow::bail!("No kernels found on gateway after polling for 180s");
-            }
-
-            tokio::time::sleep(poll_interval).await;
         }
+
+        let kernels: Vec<GatewayKernel> = response
+            .json()
+            .await
+            .context("Failed to parse kernel list from gateway")?;
+
+        if let Some(kernel) = kernels.into_iter().next() {
+            return Ok(kernel.id);
+        }
+
+        eprintln!("No kernels running on gateway; starting a new one...");
+        self.start_kernel().await
+    }
+
+    async fn start_kernel(&self) -> Result<String> {
+        let url = format!("{}/api/kernels", self.gateway_url.trim_end_matches('/'));
+        let mut body = serde_json::Map::new();
+        if let Some(name) = self.config.kernel_name.as_ref() {
+            body.insert("name".to_string(), serde_json::Value::String(name.clone()));
+        }
+
+        let response = self
+            .http_client
+            .post(&url)
+            .header("Authorization", self.auth_header())
+            .json(&serde_json::Value::Object(body))
+            .send()
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to start a kernel on gateway at {}",
+                    self.gateway_url
+                )
+            })?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            match status.as_u16() {
+                401 | 403 => anyhow::bail!(
+                    "Gateway rejected authentication ({}) when starting a kernel.",
+                    status
+                ),
+                _ => anyhow::bail!(
+                    "Gateway returned status {} when starting a kernel. Pass --kernel-id to use an existing kernel. Body: {}",
+                    status,
+                    body
+                ),
+            }
+        }
+
+        let kernel: GatewayKernel = response
+            .json()
+            .await
+            .context("Failed to parse kernel response from gateway")?;
+        Ok(kernel.id)
     }
 
     fn ws_url_for_kernel(&self, kernel_id: &str) -> String {
-        // /api/kernels/<id>/channels — replace http(s) → ws(s) once.
-        format!(
-            "{}/api/kernels/{}/channels",
-            self.gateway_url
-                .trim_end_matches('/')
-                .replacen("http", "ws", 1),
-            kernel_id,
-        )
+        let trimmed = self.gateway_url.trim_end_matches('/');
+        let base = if let Some(rest) = trimmed.strip_prefix("https://") {
+            format!("wss://{}", rest)
+        } else if let Some(rest) = trimmed.strip_prefix("http://") {
+            format!("ws://{}", rest)
+        } else {
+            trimmed.to_string()
+        };
+        format!("{}/api/kernels/{}/channels", base, kernel_id)
     }
 
     async fn execute_cell(
@@ -307,6 +357,13 @@ mod tests {
         assert_eq!(
             exec.ws_url_for_kernel("abc"),
             "wss://gw.example.com/api/kernels/abc/channels"
+        );
+
+        // "http" inside a path segment must not be rewritten — only the scheme is.
+        let exec = executor("https://gw.example.com/httpapi", "t", "token");
+        assert_eq!(
+            exec.ws_url_for_kernel("abc"),
+            "wss://gw.example.com/httpapi/api/kernels/abc/channels"
         );
     }
 }
