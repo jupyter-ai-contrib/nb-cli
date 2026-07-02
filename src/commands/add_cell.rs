@@ -225,7 +225,7 @@ pub fn execute(args: AddCellArgs) -> Result<()> {
     let mode = common::resolve_execution_mode(args.server.clone(), args.token.clone())?;
 
     match &mode {
-        ExecutionMode::Local => execute_file_based(args),
+        ExecutionMode::Local | ExecutionMode::RemoteKernel { .. } => execute_file_based(args),
         ExecutionMode::Remote { .. } => {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()

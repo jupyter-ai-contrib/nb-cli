@@ -221,7 +221,7 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     // FileID call instead of a separate probe round trip.
     let ydoc_available = match &mode {
         ExecutionMode::Remote { .. } => common::resolve_ydoc_available(&args.server, &args.token),
-        ExecutionMode::Local => None,
+        ExecutionMode::Local | ExecutionMode::RemoteKernel { .. } => None,
     };
 
     // Create execution config

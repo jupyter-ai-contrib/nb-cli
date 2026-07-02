@@ -79,7 +79,7 @@ impl KernelWebSocket {
                 .context("Invalid Sec-WebSocket-Protocol value")?,
         );
 
-        let (ws_stream, _) = connect_async(req)
+        let (ws_stream, _) = tokio_tungstenite::connect_async(req)
             .await
             .context("Failed to connect to kernel WebSocket")?;
 
