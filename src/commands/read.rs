@@ -71,7 +71,10 @@ pub fn execute(args: ReadArgs) -> Result<()> {
                 &server_path,
             ))?
         }
-        crate::execution::types::ExecutionMode::Local => notebook::read_notebook(&file_path)?,
+        crate::execution::types::ExecutionMode::Local
+        | crate::execution::types::ExecutionMode::RemoteKernel { .. } => {
+            notebook::read_notebook(&file_path)?
+        }
     };
 
     // Determine format: markdown (default) or JSON

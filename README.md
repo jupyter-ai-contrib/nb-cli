@@ -225,6 +225,28 @@ nb execute experiment.ipynb --cell-index 0
 nb disconnect
 ```
 
+## Gateway Mode
+
+**Execute against a Jupyter Kernel Gateway when no full Jupyter Server is available.**
+
+A kernel gateway exposes kernels over REST and WebSocket but has no Contents API. The notebook stays local; only execution runs on the gateway.
+
+```bash
+nb execute notebook.ipynb \
+  --gateway http://kg.example.com:8888 \
+  --gateway-token "$KG_TOKEN"
+```
+
+If `--kernel-id` is omitted, `nb` reuses the first kernel on the gateway when listing is permitted, otherwise it starts a new one via `POST /api/kernels`.
+
+**Gateway options:**
+- `--gateway`: Kernel gateway URL (e.g. `http://host:8888`)
+- `--gateway-token`: Authentication token (required when `--gateway` is set)
+- `--gateway-auth-scheme`: Authorization scheme (default `token`; use `Bearer` for OAuth-style gateways)
+- `--kernel-id`: Target a specific kernel instead of discovering one
+
+**Note**: Gateway mode has no `nb connect` equivalent — pass the flags on each `nb execute` invocation.
+
 ## Commands
 
 | Command | Purpose |
