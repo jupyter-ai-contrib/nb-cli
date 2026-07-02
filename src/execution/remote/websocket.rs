@@ -79,9 +79,21 @@ impl KernelWebSocket {
                 .context("Invalid Sec-WebSocket-Protocol value")?,
         );
 
-        let (ws_stream, _) = tokio_tungstenite::connect_async(req)
+        let (ws_stream, response) = tokio_tungstenite::connect_async(req)
             .await
             .context("Failed to connect to kernel WebSocket")?;
+
+        let accepted = response
+            .headers()
+            .get(SEC_WEBSOCKET_PROTOCOL)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if accepted != "v1.kernel.websocket.jupyter.org" {
+            anyhow::bail!(
+                "Server does not support WebSocket v1 kernel protocol (got {:?})",
+                accepted
+            );
+        }
 
         let (write, read) = ws_stream.split();
         Ok(Self { write, read })
@@ -328,6 +340,35 @@ impl KernelWebSocket {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn connect_with_auth_rejects_server_without_v1_subprotocol() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let _ws = tokio_tungstenite::accept_async(stream).await;
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+        });
+
+        let err = match KernelWebSocket::connect_with_auth(
+            &format!("ws://{}/api/kernels/k/channels", addr),
+            "token test",
+        )
+        .await
+        {
+            Ok(_) => panic!(
+                "connect_with_auth must fail when the server does not accept the v1 subprotocol"
+            ),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string().contains("WebSocket v1 kernel protocol"),
+            "unexpected error: {}",
+            err
+        );
+    }
 
     #[tokio::test]
     async fn connect_rejects_server_without_v1_subprotocol() {
