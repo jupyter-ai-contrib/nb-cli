@@ -88,12 +88,17 @@ impl RemoteExecutor {
         let cell_idx = cell_index.context("cell_index required for remote execution")?;
         let ydoc = self.ydoc.as_mut().context("Y.js client not connected")?;
         let http = reqwest::Client::new();
+        // jupyter-collaboration doesn't write outputs to Y.js itself, so once
+        // the kernel goes idle we write our own kernel-WS-collected outputs
+        // and let the read loop below pick them back up from the doc.
+        let client_writes_outputs = !ydoc.server_writes_outputs();
 
         let msg_id = ws
             .send_execute_request(code, !self.config.allow_errors, cell_id)
             .await?;
 
         let mut outputs: Vec<nbformat::v4::Output> = Vec::new();
+        let mut kernel_outputs: Vec<nbformat::v4::Output> = Vec::new();
         let mut fetched_urls: HashSet<String> = HashSet::new();
         let mut seen_indices: HashSet<usize> = HashSet::new();
         let mut idle_received = false;
@@ -154,6 +159,17 @@ impl RemoteExecutor {
                 }
             }
 
+            // jupyter-collaboration never writes outputs to Y.js itself, so
+            // once the kernel is idle, write our own kernel-WS-collected
+            // outputs and let the read loop above pick them up next
+            // iteration.
+            if client_writes_outputs && idle_received && !ec_ready && !kernel_outputs.is_empty() {
+                ydoc.update_cell_outputs(cell_idx, kernel_outputs.clone())?;
+                ydoc.update_cell_execution_count(cell_idx, expected_ec)?;
+                ydoc.sync().await?;
+                continue;
+            }
+
             if idle_received {
                 match tokio::time::timeout_at(deadline, ydoc.recv_update()).await {
                     Ok(Ok(_)) => {}
@@ -187,7 +203,15 @@ impl RemoteExecutor {
                                                 idle_received = true;
                                             }
                                         }
-                                        _ => {}
+                                        _ => {
+                                            if client_writes_outputs {
+                                                if let Some(output) =
+                                                    Self::kernel_msg_to_output(&msg.content)
+                                                {
+                                                    kernel_outputs.push(output);
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -206,11 +230,84 @@ impl RemoteExecutor {
             }
         }
 
+        // Fallback: the Y.js write/sync above may not have round-tripped
+        // through the read loop before the post-idle timeout broke us out;
+        // return what the kernel WS collected rather than losing output.
+        if client_writes_outputs && !kernel_outputs.is_empty() {
+            let ec = expected_ec;
+            let has_error = kernel_outputs
+                .iter()
+                .any(|o| matches!(o, nbformat::v4::Output::Error(_)));
+            let error_info = kernel_outputs.iter().find_map(|o| {
+                if let nbformat::v4::Output::Error(err) = o {
+                    Some(ExecutionError {
+                        ename: err.ename.clone(),
+                        evalue: err.evalue.clone(),
+                        traceback: err.traceback.clone(),
+                    })
+                } else {
+                    None
+                }
+            });
+            return if has_error {
+                Ok(ExecutionResult::error(
+                    kernel_outputs,
+                    ec,
+                    error_info.unwrap(),
+                ))
+            } else {
+                Ok(ExecutionResult::success(kernel_outputs, ec))
+            };
+        }
+
         let ec = ydoc
             .read_cell_outputs(cell_idx)
             .ok()
             .and_then(|c| c.execution_count);
         Ok(ExecutionResult::success(outputs, ec))
+    }
+
+    /// Convert a kernel iopub message to an nbformat output, for the
+    /// jupyter-collaboration path where outputs must be collected from the
+    /// kernel WS directly (the server won't write them to Y.js itself).
+    fn kernel_msg_to_output(content: &JupyterMessageContent) -> Option<nbformat::v4::Output> {
+        match content {
+            JupyterMessageContent::StreamContent(stream) => {
+                let name = match stream.name {
+                    jupyter_protocol::Stdio::Stdout => "stdout".to_string(),
+                    jupyter_protocol::Stdio::Stderr => "stderr".to_string(),
+                };
+                Some(nbformat::v4::Output::Stream {
+                    name,
+                    text: nbformat::v4::MultilineString(stream.text.clone()),
+                })
+            }
+            JupyterMessageContent::ExecuteResult(result) => {
+                let json = serde_json::json!({
+                    "output_type": "execute_result",
+                    "execution_count": result.execution_count.value(),
+                    "data": result.data,
+                    "metadata": result.metadata
+                });
+                serde_json::from_value(json).ok()
+            }
+            JupyterMessageContent::DisplayData(display) => {
+                let json = serde_json::json!({
+                    "output_type": "display_data",
+                    "data": display.data,
+                    "metadata": display.metadata
+                });
+                serde_json::from_value(json).ok()
+            }
+            JupyterMessageContent::ErrorOutput(error) => {
+                Some(nbformat::v4::Output::Error(nbformat::v4::ErrorOutput {
+                    ename: error.ename.clone(),
+                    evalue: error.evalue.clone(),
+                    traceback: error.traceback.clone(),
+                }))
+            }
+            _ => None,
+        }
     }
 
     /// Kernel-WS-only output collection (vanilla jupyter_server, no Y.js)

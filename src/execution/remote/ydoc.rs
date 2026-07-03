@@ -54,6 +54,8 @@ struct FileIdResponse {
 struct CollabSessionResponse {
     #[serde(rename = "fileId")]
     file_id: String,
+    #[serde(rename = "sessionId")]
+    session_id: String,
 }
 
 /// Definitive signal that the server has no compatible Y.js backend: neither
@@ -90,16 +92,19 @@ pub struct YDocClient {
     file_id: String,
     /// Track the document state when we last synced, so we only send changes
     last_state: StateVector,
+    /// Whether the server writes outputs to Y.js itself (jupyter-server-documents
+    /// does; jupyter-collaboration does not, so the caller must write them).
+    server_writes_outputs: bool,
 }
 
 impl YDocClient {
     /// Connect to Y.js room for the given notebook
     pub async fn connect(server_url: String, token: String, notebook_path: String) -> Result<Self> {
-        // Step 1: Get file ID from FileID API
-        let file_id = Self::get_file_id(&server_url, &token, &notebook_path).await?;
+        // Step 1: Get file ID (and session ID, if the backend is jupyter-collaboration)
+        let (file_id, session_id) = Self::get_file_id(&server_url, &token, &notebook_path).await?;
 
         // Step 2: Connect to room WebSocket
-        let ws_url = Self::build_room_ws_url(&server_url, &file_id, &token)?;
+        let ws_url = Self::build_room_ws_url(&server_url, &file_id, &token, session_id.as_deref())?;
 
         let (ws_stream, _) = connect_async(&ws_url)
             .await
@@ -113,6 +118,9 @@ impl YDocClient {
             ws: ws_stream,
             file_id,
             last_state: StateVector::default(),
+            // jupyter-collaboration returns a sessionId and does not write
+            // outputs to the Y.js doc itself; jupyter-server-documents does.
+            server_writes_outputs: session_id.is_none(),
         };
 
         // Step 4: Perform Y.js sync handshake with timeout
@@ -133,9 +141,16 @@ impl YDocClient {
     /// /api/collaboration/session (jupyter-collaboration). If both are absent
     /// (404), return [`YjsUnavailable`] so callers fall back to the Contents API
     /// path. A non-404 from either endpoint is transient and stays a hard error,
-    /// so a flaky collaboration server is never silently downgraded. (#95 extends
-    /// the collaboration-session branch for full jupyter-collaboration support.)
-    async fn get_file_id(server_url: &str, token: &str, notebook_path: &str) -> Result<String> {
+    /// so a flaky collaboration server is never silently downgraded.
+    ///
+    /// Returns `(file_id, session_id)`. `session_id` is `Some` only for the
+    /// jupyter-collaboration path, where the room WebSocket handshake rejects
+    /// connections without it (`1003 unknown_session`).
+    async fn get_file_id(
+        server_url: &str,
+        token: &str,
+        notebook_path: &str,
+    ) -> Result<(String, Option<String>)> {
         let http_client = HttpClient::new();
 
         let index_url = format!("{}/api/fileid/index", server_url);
@@ -162,7 +177,7 @@ impl YDocClient {
                 .json()
                 .await
                 .context("Failed to parse FileID API response")?;
-            return Ok(file_id_response.id);
+            return Ok((file_id_response.id, None));
         }
 
         if response.status().as_u16() != 404 {
@@ -194,7 +209,7 @@ impl YDocClient {
                 .json()
                 .await
                 .context("Failed to parse collaboration session response")?;
-            return Ok(session_response.file_id);
+            return Ok((session_response.file_id, Some(session_response.session_id)));
         }
 
         // Neither backend answered. A 404 is the definitive backend-absent
@@ -213,8 +228,15 @@ impl YDocClient {
         );
     }
 
-    /// Build WebSocket URL for Y.js room
-    fn build_room_ws_url(server_url: &str, file_id: &str, token: &str) -> Result<String> {
+    /// Build WebSocket URL for Y.js room. `session_id` must be appended for
+    /// jupyter-collaboration, which otherwise rejects the handshake with
+    /// `1003 unknown_session`.
+    fn build_room_ws_url(
+        server_url: &str,
+        file_id: &str,
+        token: &str,
+        session_id: Option<&str>,
+    ) -> Result<String> {
         // Parse base URL to extract host and port
         let base_url = Url::parse(server_url).context("Invalid server URL")?;
 
@@ -235,12 +257,18 @@ impl YDocClient {
             "ws"
         };
 
-        let ws_url = format!(
-            "{}://{}:{}/api/collaboration/room/json:notebook:{}?token={}",
-            ws_scheme, host, port, file_id, token
-        );
+        let mut ws_url = Url::parse(&format!(
+            "{}://{}:{}/api/collaboration/room/json:notebook:{}",
+            ws_scheme, host, port, file_id
+        ))
+        .context("Failed to build WebSocket URL")?;
 
-        Ok(ws_url)
+        ws_url.query_pairs_mut().append_pair("token", token);
+        if let Some(sid) = session_id {
+            ws_url.query_pairs_mut().append_pair("sessionId", sid);
+        }
+
+        Ok(ws_url.to_string())
     }
 
     /// Perform Y.js sync protocol handshake
@@ -362,8 +390,15 @@ impl YDocClient {
         Ok(())
     }
 
+    /// Whether the server writes outputs to Y.js itself (jupyter-server-documents
+    /// does; jupyter-collaboration does not, so the caller must write them via
+    /// [`update_cell_outputs`](Self::update_cell_outputs) and
+    /// [`update_cell_execution_count`](Self::update_cell_execution_count)).
+    pub fn server_writes_outputs(&self) -> bool {
+        self.server_writes_outputs
+    }
+
     /// Update cell outputs in the Y.js document
-    #[allow(dead_code)]
     pub fn update_cell_outputs(&mut self, cell_index: usize, outputs: Vec<Output>) -> Result<()> {
         let cells_array: ArrayRef = self.doc.get_or_insert_array("cells");
         let mut txn = self.doc.transact_mut();
@@ -375,7 +410,6 @@ impl YDocClient {
     }
 
     /// Update cell execution_count in the Y.js document
-    #[allow(dead_code)]
     pub fn update_cell_execution_count(
         &mut self,
         cell_index: usize,
@@ -644,8 +678,65 @@ mod fileid_classification_tests {
     #[tokio::test]
     async fn get_file_id_returns_id_on_success() {
         let url = fileid_stub(200).await;
-        let id = YDocClient::get_file_id(&url, "t", "n.ipynb").await.unwrap();
+        let (id, session_id) = YDocClient::get_file_id(&url, "t", "n.ipynb").await.unwrap();
         assert_eq!(id, "file-123");
+        assert_eq!(session_id, None);
+    }
+
+    /// Stub that 404s the first request (fileid/index, JSD absent) and
+    /// returns a collaboration-session body with both fileId and sessionId
+    /// on the second (jupyter-collaboration fallback).
+    async fn collab_session_stub() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let mut request_count = 0u32;
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let mut tmp = [0u8; 1024];
+                let _ = sock.read(&mut tmp).await;
+                request_count += 1;
+                let (status, body) = if request_count == 1 {
+                    (404, "{}".to_string())
+                } else {
+                    (
+                        200,
+                        r#"{"fileId":"file-456","sessionId":"session-789"}"#.to_string(),
+                    )
+                };
+                let resp = format!(
+                    "HTTP/1.1 {} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status,
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+        format!("http://{}", addr)
+    }
+
+    #[tokio::test]
+    async fn get_file_id_returns_session_id_for_jupyter_collaboration() {
+        let url = collab_session_stub().await;
+        let (id, session_id) = YDocClient::get_file_id(&url, "t", "n.ipynb").await.unwrap();
+        assert_eq!(id, "file-456");
+        assert_eq!(session_id, Some("session-789".to_string()));
+    }
+
+    #[test]
+    fn build_room_ws_url_appends_session_id_when_present() {
+        let url =
+            YDocClient::build_room_ws_url("http://localhost:8888", "file-1", "tok", Some("sess-1"))
+                .unwrap();
+        assert!(url.contains("sessionId=sess-1"), "url was: {}", url);
+    }
+
+    #[test]
+    fn build_room_ws_url_omits_session_id_when_absent() {
+        let url =
+            YDocClient::build_room_ws_url("http://localhost:8888", "file-1", "tok", None).unwrap();
+        assert!(!url.contains("sessionId"), "url was: {}", url);
     }
 
     #[tokio::test]
