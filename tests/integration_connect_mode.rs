@@ -552,7 +552,15 @@ fn test_execute_from_different_cwd() {
 // ==================== CLEAR OUTPUTS TESTS ====================
 
 /// Clear all outputs from a notebook in connect mode.
+///
+/// Ignored against jupyter-collaboration: `nb output clear` correctly edits the
+/// Y.js room, but jupyter_server_ydoc only flushes the room to disk on a ~1s
+/// debounced timer, so the immediate `nb read` below races that debounce and
+/// observes stale content. Distinct from #90 (jupyter-server-documents' clear
+/// never persists at all, permanently, due to externalized-output
+/// re-materialization); see #100 for the jupyter-collaboration mechanism.
 #[test]
+#[ignore = "jupyter-collaboration: read-after-write races jupyter_server_ydoc's ~1s save debounce, see jupyter-ai-contrib/nb-cli#100"]
 fn test_clear_outputs_in_connect_mode() {
     let Some(ctx) = TestCtx::new() else {
         eprintln!("⚠️  Skipping connect-mode test: jupyter server not available");
@@ -591,7 +599,11 @@ fn test_clear_outputs_in_connect_mode() {
 }
 
 /// Clear outputs from a specific cell by index in connect mode.
+///
+/// Ignored against jupyter-collaboration for the same reason as
+/// `test_clear_outputs_in_connect_mode` above: see jupyter-ai-contrib/nb-cli#100.
 #[test]
+#[ignore = "jupyter-collaboration: read-after-write races jupyter_server_ydoc's ~1s save debounce, see jupyter-ai-contrib/nb-cli#100"]
 fn test_clear_outputs_specific_cell_in_connect_mode() {
     let Some(ctx) = TestCtx::new() else {
         eprintln!("⚠️  Skipping connect-mode test: jupyter server not available");

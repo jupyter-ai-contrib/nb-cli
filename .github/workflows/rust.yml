@@ -88,9 +88,11 @@ jobs:
     name: test connect (jupyter-collaboration)
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # First CI enablement of this suite/backend combination; keep non-blocking
-    # until it's proven stable across enough real-world CI runs.
-    continue-on-error: true
+    # This job blocks: the 2 tests with a known, unrelated pre-existing issue
+    # (jupyter-ai-contrib/nb-cli#100, a read-after-write race in
+    # jupyter_server_ydoc's save debounce, not a PR #99-scoped regression) are
+    # marked #[ignore] in the test source rather than made non-blocking here,
+    # so the execute/restart tests this backend actually cares about gate CI.
 
     steps:
     - uses: actions/checkout@v4
