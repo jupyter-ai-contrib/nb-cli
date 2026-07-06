@@ -36,12 +36,14 @@ code intentionally never deletes sessions, so tests must do this themselves).
 **Known state (2026-07-05):** against `jupyter-collaboration`, the 4
 execute/restart tests (what PR #99 / issue #92 fixed — FileID fallback, `sessionId`
 on the Y.js room WS handshake, v1 kernel-WS subprotocol, client-side output
-writing) pass 10/10 runs with zero flakiness. `test_clear_outputs_in_connect_mode`
-and `test_clear_outputs_specific_cell_in_connect_mode` fail consistently
-(10/10) against jupyter-collaboration — but this is **not** a jupyter-collaboration-specific
-or PR #99-scoped bug: the same two tests also fail against JSD on this codebase,
-so it predates and is unrelated to PR #99 (which only touches
-`src/execution/remote/{mod,ydoc}.rs`, the execute path). Root cause looks like
-`output clear`'s Y.js-doc edits not round-tripping back to the persisted
-notebook for either backend. Not yet tracked as an issue upstream; out of scope
-for PR #99 verification, same category as the already-known JSD bugs #87/#90/#97.
+writing) pass 10/10 runs with zero flakiness, and gate the `test-connect-collab`
+CI job. `test_clear_outputs_in_connect_mode` and
+`test_clear_outputs_specific_cell_in_connect_mode` are marked `#[ignore]`
+against jupyter-collaboration (issue #100): `nb output clear` correctly edits
+the Y.js room, but `jupyter_server_ydoc` only flushes the room to disk on a
+debounced ~1s timer (`document_save_delay`), so `nb read` immediately
+afterward races that debounce and can observe stale content — confirmed by
+direct measurement (still stale at +0.7s, cleared by +1.7s). This is a
+**different** root cause from #90 (JSD's clear never persists, permanently,
+because externalized output files get unconditionally re-materialized into
+the notebook on every save) — don't conflate the two if either gets fixed.
