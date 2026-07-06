@@ -133,7 +133,6 @@ fn start_shared_server() -> Option<SharedServerInfo> {
         &format!("--ServerApp.token={}", token),
         &format!("--ServerApp.root_dir={}", server_root.display()),
         &format!("--port={}", port),
-        "--ServerApp.open_browser=False",
     ])
     .env("PATH", &venv_path_env)
     .env("VIRTUAL_ENV", &venv_root)
