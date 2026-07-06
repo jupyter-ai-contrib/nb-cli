@@ -73,6 +73,25 @@ pub fn parse_notebook_header(output: &str) -> Option<Sentinel> {
 #[allow(dead_code)]
 static VENV_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 
+/// Connect-mode backend selector, read from `NB_TEST_BACKEND`. Defaults to
+/// `jsd` (jupyter-server-documents), which is also what local-mode tests use.
+/// jupyter-collaboration and jupyter-server-documents must never share a venv
+/// (they are competing collaborative-editing extensions), so each backend
+/// gets its own venv directory below.
+#[allow(dead_code)]
+pub fn test_backend() -> String {
+    std::env::var("NB_TEST_BACKEND").unwrap_or_else(|_| "jsd".to_string())
+}
+
+/// Venv directory name for the currently selected backend (see [`test_backend`]).
+#[allow(dead_code)]
+fn venv_dir_name() -> &'static str {
+    match test_backend().as_str() {
+        "jupyter-collaboration" | "collab" => ".test-venv-collab",
+        _ => ".test-venv",
+    }
+}
+
 /// Check if uv is installed
 #[allow(dead_code)]
 pub fn has_uv() -> bool {
@@ -113,7 +132,7 @@ fn initialize_venv() -> Option<PathBuf> {
     }
 
     let test_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
-    let venv_path = test_dir.join(".test-venv");
+    let venv_path = test_dir.join(venv_dir_name());
 
     // Create venv if it doesn't exist
     if !venv_path.exists() {
