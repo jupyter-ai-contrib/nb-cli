@@ -76,14 +76,62 @@ jobs:
         cargo test --bins --verbose
         echo "✅ All tests passed!"
 
-    # Connect-mode tests require a running Jupyter server and are not run in CI by default.
-    # To enable, set RUN_CONNECT_TESTS=true in the workflow environment and ensure
-    # jupyter_server + jupyter-server-documents are installed in the test venv.
-    # Note: must use --test-threads=1 to avoid races on the shared Jupyter server.
+    # Connect-mode tests against jupyter-server-documents are not run in CI: they
+    # are known-flaky against that backend (tracked separately as #87/#90/#97),
+    # out of scope for this job. See the test-connect-collab job below for the
+    # jupyter-collaboration backend, which has its own pinned venv.
     #
-    # - name: Run connect-mode tests
-    #   if: env.RUN_CONNECT_TESTS == 'true'
-    #   run: cargo test --test integration_connect_mode -- --test-threads=1
+    # - name: Run connect-mode tests (jupyter-server-documents)
+    #   run: NB_TEST_BACKEND=jsd cargo test --test integration_connect_mode -- --test-threads=1
+
+  test-connect-collab:
+    name: test connect (jupyter-collaboration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # First CI enablement of this suite/backend combination; keep non-blocking
+    # until it's proven stable across enough real-world CI runs.
+    continue-on-error: true
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Rust cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        enable-cache: true
+
+    - name: Cache jupyter-collaboration test venv
+      uses: actions/cache@v4
+      with:
+        path: tests/.test-venv-collab
+        key: ${{ runner.os }}-test-venv-collab-jupyter-collaboration-4.4.1
+
+    - name: Setup test environment (jupyter-collaboration)
+      run: ./tests/setup_test_env.sh jupyter-collaboration
+
+    - name: Build
+      run: cargo build --verbose
+
+    - name: Run connect-mode tests (jupyter-collaboration)
+      run: NB_TEST_BACKEND=jupyter-collaboration cargo test --test integration_connect_mode -- --test-threads=1
 
   test-windows:
     name: Test (Windows)

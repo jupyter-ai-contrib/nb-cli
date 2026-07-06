@@ -4,6 +4,17 @@
 //! to avoid races on the shared server. Always invoke with:
 //!
 //!   cargo test --test integration_connect_mode -- --test-threads=1
+//!
+//! By default the server runs jupyter-server-documents (the same venv local-mode
+//! tests use). To run against jupyter-collaboration instead, set NB_TEST_BACKEND
+//! and use its separate pinned venv (see tests/setup_test_env.sh):
+//!
+//!   ./tests/setup_test_env.sh jupyter-collaboration
+//!   NB_TEST_BACKEND=jupyter-collaboration cargo test --test integration_connect_mode -- --test-threads=1
+//!
+//! jupyter-collaboration and jupyter-server-documents must never be installed in
+//! the same venv (they are competing collaborative-editing extensions), so each
+//! backend gets its own venv directory (.test-venv vs .test-venv-collab).
 
 mod test_helpers;
 
@@ -14,6 +25,9 @@ use std::process::Command;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 // reqwest is a workspace dependency used for the server health-check poll.
 use reqwest;
@@ -44,7 +58,11 @@ fn shared_server() -> Option<&'static SharedServerInfo> {
 }
 
 fn start_shared_server() -> Option<SharedServerInfo> {
-    // Reuse the existing execution venv (ipykernel already installed there).
+    // Backend is selected via NB_TEST_BACKEND ("jsd" [default] or
+    // "jupyter-collaboration"); this also picks the venv directory
+    // (test_helpers::setup_execution_venv), since the two backends must
+    // never be installed into the same venv.
+    let backend = test_helpers::test_backend();
     let venv_root = test_helpers::setup_execution_venv()?;
     let venv_path_env = test_helpers::setup_venv_environment()?;
 
@@ -54,24 +72,31 @@ fn start_shared_server() -> Option<SharedServerInfo> {
         venv_root.join("bin")
     };
 
-    // Ensure jupyter_server and jupyter-server-documents are installed (idempotent).
+    // Ensure jupyter_server and the selected collaboration backend are installed
+    // (idempotent). Pinned to versions verified to work together (see AGENTS.md):
     // jupyter-server-documents provides the FileID / Y.js API that nb's remote
-    // executor relies on for real-time output observation.
+    // executor relies on for real-time output observation; jupyter-collaboration
+    // is the alternate backend PR #99 fixed connect-mode execute against.
+    let packages: &[&str] = match backend.as_str() {
+        "jupyter-collaboration" | "collab" => {
+            &["jupyter_server==2.20.0", "jupyter-collaboration==4.4.1"]
+        }
+        _ => &["jupyter_server==2.20.0", "jupyter-server-documents==0.2.5"],
+    };
+
+    let mut install_args = vec!["pip", "install", "--python", venv_root.to_str().unwrap()];
+    install_args.extend_from_slice(packages);
     let install_ok = Command::new("uv")
-        .args([
-            "pip",
-            "install",
-            "--python",
-            venv_root.to_str().unwrap(),
-            "jupyter_server",
-            "jupyter-server-documents",
-        ])
+        .args(&install_args)
         .status()
         .map(|s| s.success())
         .unwrap_or(false);
 
     if !install_ok {
-        eprintln!("⚠️  Could not install jupyter_server into test venv");
+        eprintln!(
+            "⚠️  Could not install {:?} into test venv for backend '{}'",
+            packages, backend
+        );
         return None;
     }
 
@@ -101,22 +126,34 @@ fn start_shared_server() -> Option<SharedServerInfo> {
     let token = "nbtest123".to_string();
 
     // Spawn the server.
-    let child = Command::new(&jupyter_bin)
-        .args([
-            "server",
-            "--no-browser",
-            &format!("--ServerApp.token={}", token),
-            &format!("--ServerApp.root_dir={}", server_root.display()),
-            &format!("--port={}", port),
-            "--ServerApp.open_browser=False",
-        ])
-        .env("PATH", &venv_path_env)
-        .env("VIRTUAL_ENV", &venv_root)
-        .env_remove("PYTHONHOME")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()?;
+    let mut cmd = Command::new(&jupyter_bin);
+    cmd.args([
+        "server",
+        "--no-browser",
+        &format!("--ServerApp.token={}", token),
+        &format!("--ServerApp.root_dir={}", server_root.display()),
+        &format!("--port={}", port),
+        "--ServerApp.open_browser=False",
+    ])
+    .env("PATH", &venv_path_env)
+    .env("VIRTUAL_ENV", &venv_root)
+    .env_remove("PYTHONHOME")
+    // jupyter-collaboration's Y-store (.jupyter_ystore.db) is written relative to
+    // the process cwd, not --ServerApp.root_dir; without this the shared test
+    // server pollutes the crate root with that file on every run.
+    .current_dir(&server_root)
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::null());
+
+    // Put the server in its own process group so cleanup can kill the whole
+    // group (server + any kernels it spawned), not just the top-level process.
+    // Without this, an interrupted test run leaks orphaned kernel processes.
+    #[cfg(unix)]
+    {
+        cmd.process_group(0);
+    }
+
+    let child = cmd.spawn().ok()?;
 
     // Leak the process guard so it lives until process exit (and kills the server).
     let _guard: &'static mut ServerKillGuard = Box::leak(Box::new(ServerKillGuard { child }));
@@ -141,13 +178,28 @@ fn start_shared_server() -> Option<SharedServerInfo> {
     })
 }
 
-/// Kills the child process when dropped.
+/// Kills the child process (and, on Unix, its whole process group) when dropped.
 struct ServerKillGuard {
     child: std::process::Child,
 }
 
 impl Drop for ServerKillGuard {
     fn drop(&mut self) {
+        // The server was spawned with process_group(0), so its pid is also its
+        // pgid. Signal the group first to take any kernels it spawned down with
+        // it; fall back to killing just the direct child in case `kill` (or the
+        // group signal) is unavailable, e.g. on non-Unix platforms.
+        #[cfg(unix)]
+        {
+            let pgid = self.child.id().to_string();
+            let _ = Command::new("kill")
+                .args(["-TERM", &format!("-{}", pgid)])
+                .status();
+            std::thread::sleep(Duration::from_millis(300));
+            let _ = Command::new("kill")
+                .args(["-KILL", &format!("-{}", pgid)])
+                .status();
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -173,6 +225,66 @@ impl TestCtx {
         fs::copy(&fixture_path, &dest_path)
             .unwrap_or_else(|_| panic!("Failed to copy fixture {}", fixture_name));
         dest_path
+    }
+
+    /// Copy a fixture like [`copy_fixture`](Self::copy_fixture), and return a guard
+    /// that explicitly deletes the notebook's Jupyter session (and its kernel) via
+    /// `DELETE /api/sessions/{id}` when dropped. Tests execute notebooks, which
+    /// creates a session/kernel that (by design, matching production semantics)
+    /// nb never deletes on its own; without this, kernels accumulate across a
+    /// long-running shared-server test run instead of being torn down between tests.
+    fn copy_fixture_with_teardown(
+        &self,
+        fixture_name: &str,
+        dest_name: &str,
+    ) -> NotebookSession<'_> {
+        let path = self.copy_fixture(fixture_name, dest_name);
+        NotebookSession {
+            ctx: self,
+            notebook_path: path,
+            dest_name: dest_name.to_string(),
+        }
+    }
+
+    /// Delete the Jupyter session (and its kernel) for `notebook_name`, if one
+    /// exists on the shared server. Best-effort: errors are swallowed since this
+    /// is cleanup, not the thing under test.
+    fn delete_session_for(&self, notebook_name: &str) {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(_) => return,
+        };
+
+        rt.block_on(async {
+            let list_url = format!(
+                "{}/api/sessions?token={}",
+                self.info.server_url, self.info.token
+            );
+            let Ok(resp) = reqwest::get(&list_url).await else {
+                return;
+            };
+            let Ok(sessions) = resp.json::<Vec<serde_json::Value>>().await else {
+                return;
+            };
+
+            let client = reqwest::Client::new();
+            for session in sessions {
+                if session.get("path").and_then(|p| p.as_str()) != Some(notebook_name) {
+                    continue;
+                }
+                let Some(id) = session.get("id").and_then(|i| i.as_str()) else {
+                    continue;
+                };
+                let delete_url = format!(
+                    "{}/api/sessions/{}?token={}",
+                    self.info.server_url, id, self.info.token
+                );
+                let _ = client.delete(&delete_url).send().await;
+            }
+        });
     }
 
     /// Run `nb` with arbitrary args, automatically appending `--server` and `--token`.
@@ -202,6 +314,29 @@ impl TestCtx {
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
             success: output.status.success(),
         }
+    }
+}
+
+/// Guard returned by [`TestCtx::copy_fixture_with_teardown`]. Derefs to the
+/// notebook's path; deletes its Jupyter session/kernel on drop so tests don't
+/// leak kernels into later tests on the shared server.
+struct NotebookSession<'a> {
+    ctx: &'a TestCtx,
+    notebook_path: PathBuf,
+    dest_name: String,
+}
+
+impl std::ops::Deref for NotebookSession<'_> {
+    type Target = PathBuf;
+
+    fn deref(&self) -> &PathBuf {
+        &self.notebook_path
+    }
+}
+
+impl Drop for NotebookSession<'_> {
+    fn drop(&mut self) {
+        self.ctx.delete_session_for(&self.dest_name);
     }
 }
 
@@ -273,7 +408,8 @@ fn test_execute_without_restart_preserves_state() {
         return;
     };
 
-    ctx.copy_fixture("for_connect_restart.ipynb", "test_preserve.ipynb");
+    let _notebook =
+        ctx.copy_fixture_with_teardown("for_connect_restart.ipynb", "test_preserve.ipynb");
 
     // First: execute the full notebook to establish kernel state.
     let result = ctx
@@ -313,7 +449,8 @@ fn test_restart_kernel_clears_state() {
     };
 
     // Use a unique notebook name so this test has its own independent session.
-    ctx.copy_fixture("for_connect_restart.ipynb", "test_restart.ipynb");
+    let _notebook =
+        ctx.copy_fixture_with_teardown("for_connect_restart.ipynb", "test_restart.ipynb");
 
     // Step 1: run the full notebook to create the session and set state.
     let result = ctx.run(&["execute", "test_restart.ipynb"]).assert_success();
@@ -369,7 +506,8 @@ fn test_restart_kernel_then_full_notebook_works() {
     };
 
     // Use a unique notebook name so this test has its own independent session.
-    ctx.copy_fixture("for_connect_restart.ipynb", "test_restart_full.ipynb");
+    let _notebook =
+        ctx.copy_fixture_with_teardown("for_connect_restart.ipynb", "test_restart_full.ipynb");
 
     // Step 1: initial full execution to create the session.
     ctx.run(&["execute", "test_restart_full.ipynb"])
@@ -396,7 +534,7 @@ fn test_execute_from_different_cwd() {
         return;
     };
 
-    ctx.copy_fixture("for_connect_restart.ipynb", "test_cwd.ipynb");
+    let _notebook = ctx.copy_fixture_with_teardown("for_connect_restart.ipynb", "test_cwd.ipynb");
 
     // Run from a temporary directory that is NOT the server root.
     let other_dir = TempDir::new().expect("Failed to create temp dir");
