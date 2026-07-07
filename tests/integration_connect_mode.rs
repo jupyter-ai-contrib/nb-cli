@@ -5,16 +5,22 @@
 //!
 //!   cargo test --test integration_connect_mode -- --test-threads=1
 //!
-//! By default the server runs jupyter-server-documents (the same venv local-mode
-//! tests use). To run against jupyter-collaboration instead, set NB_TEST_BACKEND
-//! and use its separate pinned venv (see tests/setup_test_env.sh):
+//! Each backend requires its own pinned venv (see tests/setup_test_env.sh).
+//! Select a backend with `NB_TEST_BACKEND`:
+//!
+//!   ./tests/setup_test_env.sh jsd
+//!   NB_TEST_BACKEND=jsd cargo test --test integration_connect_mode -- --test-threads=1
 //!
 //!   ./tests/setup_test_env.sh jupyter-collaboration
 //!   NB_TEST_BACKEND=jupyter-collaboration cargo test --test integration_connect_mode -- --test-threads=1
 //!
+//!   ./tests/setup_test_env.sh none
+//!   NB_TEST_BACKEND=none cargo test --test integration_connect_mode -- --test-threads=1
+//!
 //! jupyter-collaboration and jupyter-server-documents must never be installed in
 //! the same venv (they are competing collaborative-editing extensions), so each
-//! backend gets its own venv directory (.test-venv vs .test-venv-collab).
+//! backend gets its own venv directory (.test-venv-jsd, .test-venv-collab, .test-venv-plain).
+//! .test-venv is reserved for local/execution tests (ipykernel only).
 
 mod test_helpers;
 
@@ -54,10 +60,11 @@ fn shared_server() -> Option<&'static SharedServerInfo> {
 }
 
 fn start_shared_server() -> Option<SharedServerInfo> {
-    // Backend is selected via NB_TEST_BACKEND ("jsd" [default] or
-    // "jupyter-collaboration"); this also picks the venv directory
-    // (test_helpers::setup_execution_venv), since the two backends must
-    // never be installed into the same venv.
+    // Backend is selected via NB_TEST_BACKEND ("jsd", "jupyter-collaboration", or
+    // "none" for plain jupyter_server with no collaboration extension); this also
+    // picks the venv directory (test_helpers::setup_execution_venv), since
+    // jupyter-collaboration and jupyter-server-documents must never be installed into
+    // the same venv.
     let backend = test_helpers::test_backend();
 
     // If NB_TEST_SERVER_URL/TOKEN are set, use the externally-managed server.
@@ -99,11 +106,14 @@ fn start_shared_server() -> Option<SharedServerInfo> {
     // (idempotent). Pinned to versions verified to work together (see AGENTS.md):
     // jupyter-server-documents provides the FileID / Y.js API that nb's remote
     // executor relies on for real-time output observation; jupyter-collaboration
-    // is the alternate backend PR #99 fixed connect-mode execute against.
+    // is the alternate backend PR #99 fixed connect-mode execute against; "none"
+    // installs neither, to verify connect-mode degrades gracefully with no
+    // collaboration extension at all.
     let packages: &[&str] = match backend.as_str() {
         "jupyter-collaboration" | "collab" => {
             &["jupyter_server==2.20.0", "jupyter-collaboration==4.4.1"]
         }
+        "none" | "plain" => &["jupyter_server==2.20.0"],
         _ => &["jupyter_server==2.20.0", "jupyter-server-documents==0.2.5"],
     };
 
@@ -424,9 +434,15 @@ fn wait_for_server(server_url: &str, token: &str, timeout: Duration) -> bool {
 ///
 /// 1. Execute the full notebook → `persistent_var` is set, cell-use prints it.
 /// 2. Execute only cell-use (index 1) without restarting → the value is still in scope.
+///
+/// Skipped against jsd: NextGenKernelManager's kernel_info polling races our execute
+/// messages on iopub, causing hangs or stale output — see issue #87.
 #[test]
-#[ignore] // #87 flaky: Y.js sync timing
 fn test_execute_without_restart_preserves_state() {
+    if test_helpers::test_backend() == "jsd" {
+        eprintln!("⚠️  Skipping: flaky against jsd (NextGenKernelManager iopub race, see #87)");
+        return;
+    }
     let Some(ctx) = TestCtx::new() else {
         eprintln!("⚠️  Skipping connect-mode test: jupyter server not available");
         return;
@@ -465,9 +481,14 @@ fn test_execute_without_restart_preserves_state() {
 /// 2. Execute only cell-use (index 1) without restart → succeeds (state preserved).
 /// 3. Execute only cell-use (index 1) with `--restart-kernel --allow-errors` →
 ///    the kernel has been restarted so `persistent_var` is undefined → NameError.
+///
+/// Skipped against jsd: see #87.
 #[test]
-#[ignore] // #87
 fn test_restart_kernel_clears_state() {
+    if test_helpers::test_backend() == "jsd" {
+        eprintln!("⚠️  Skipping: flaky against jsd (NextGenKernelManager iopub race, see #87)");
+        return;
+    }
     let Some(ctx) = TestCtx::new() else {
         eprintln!("⚠️  Skipping connect-mode test: jupyter server not available");
         return;
@@ -523,9 +544,14 @@ fn test_restart_kernel_clears_state() {
 ///
 /// After the kernel is restarted, running all cells from scratch must work correctly
 /// and produce the expected output.
+///
+/// Skipped against jsd: see #87.
 #[test]
-#[ignore] // #87
 fn test_restart_kernel_then_full_notebook_works() {
+    if test_helpers::test_backend() == "jsd" {
+        eprintln!("⚠️  Skipping: flaky against jsd (NextGenKernelManager iopub race, see #87)");
+        return;
+    }
     let Some(ctx) = TestCtx::new() else {
         eprintln!("⚠️  Skipping connect-mode test: jupyter server not available");
         return;
