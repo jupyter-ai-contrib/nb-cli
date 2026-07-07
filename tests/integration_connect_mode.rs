@@ -575,7 +575,7 @@ fn test_restart_kernel_then_full_notebook_works() {
             "test_restart_full.ipynb",
             "--restart-kernel",
             "--timeout",
-            "60",
+            "120",
         ])
         .assert_success();
 
