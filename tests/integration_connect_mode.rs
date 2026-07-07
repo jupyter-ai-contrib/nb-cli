@@ -327,8 +327,14 @@ impl TestCtx {
 
     /// Run `nb` from a specific working directory.
     fn run_from_dir(&self, args: &[&str], cwd: &std::path::Path) -> CommandResult {
-        let output = Command::new(&self.info.binary_path)
-            .args(args)
+        let mut cmd = Command::new(&self.info.binary_path);
+        cmd.args(args);
+        // CI runners are slow to start kernels; use a generous per-cell timeout for
+        // all execute invocations so tests don't flap on cold-start latency.
+        if args.contains(&"execute") && !args.contains(&"--timeout") {
+            cmd.args(["--timeout", "120"]);
+        }
+        let output = cmd
             .args([
                 "--server",
                 &self.info.server_url,
@@ -567,16 +573,8 @@ fn test_restart_kernel_then_full_notebook_works() {
 
     // Step 2: full re-execution with --restart-kernel.
     // All cells are run in order from scratch, so cell-set runs before cell-use.
-    // Use a longer timeout: after a restart the kernel needs a full reconnect cycle
-    // before executing, which can exceed the 30s default on slow CI runners.
     let result = ctx
-        .run(&[
-            "execute",
-            "test_restart_full.ipynb",
-            "--restart-kernel",
-            "--timeout",
-            "120",
-        ])
+        .run(&["execute", "test_restart_full.ipynb", "--restart-kernel"])
         .assert_success();
 
     assert!(
