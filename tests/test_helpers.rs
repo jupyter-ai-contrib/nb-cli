@@ -12,16 +12,19 @@ pub struct Sentinel {
     /// Sentinel type: "notebook", "cell", or "output"
     pub kind: String,
     /// Parsed JSON metadata following the sentinel marker
+    #[allow(dead_code)]
     pub metadata: Value,
 }
 
 impl Sentinel {
     /// Get a string field from the metadata
+    #[allow(dead_code)]
     pub fn get_str(&self, key: &str) -> Option<&str> {
         self.metadata.get(key)?.as_str()
     }
 
     /// Get an integer field from the metadata
+    #[allow(dead_code)]
     pub fn get_i64(&self, key: &str) -> Option<i64> {
         self.metadata.get(key)?.as_i64()
     }
@@ -47,6 +50,7 @@ pub fn parse_sentinels(output: &str) -> Vec<Sentinel> {
 }
 
 /// Extract only @@cell sentinels from output
+#[allow(dead_code)]
 pub fn parse_cells(output: &str) -> Vec<Sentinel> {
     parse_sentinels(output)
         .into_iter()
@@ -55,6 +59,7 @@ pub fn parse_cells(output: &str) -> Vec<Sentinel> {
 }
 
 /// Extract only @@output sentinels from output
+#[allow(dead_code)]
 pub fn parse_outputs(output: &str) -> Vec<Sentinel> {
     parse_sentinels(output)
         .into_iter()
@@ -74,20 +79,24 @@ pub fn parse_notebook_header(output: &str) -> Option<Sentinel> {
 static VENV_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 
 /// Connect-mode backend selector, read from `NB_TEST_BACKEND`. Defaults to
-/// `jsd` (jupyter-server-documents), which is also what local-mode tests use.
-/// jupyter-collaboration and jupyter-server-documents must never share a venv
-/// (they are competing collaborative-editing extensions), so each backend
-/// gets its own venv directory below.
+/// unset (empty string), which maps to `.test-venv` — the local-execution venv
+/// shared by integration_local_mode and integration_execution (ipykernel only,
+/// no Jupyter Server extension). Connect-mode tests set this explicitly to one of:
+/// `jsd`, `jupyter-collaboration`, or `none`. Each backend gets its own venv
+/// directory since jupyter-collaboration and jupyter-server-documents must never
+/// be installed together (competing collaborative-editing extensions).
 #[allow(dead_code)]
 pub fn test_backend() -> String {
-    std::env::var("NB_TEST_BACKEND").unwrap_or_else(|_| "jsd".to_string())
+    std::env::var("NB_TEST_BACKEND").unwrap_or_default()
 }
 
 /// Venv directory name for the currently selected backend (see [`test_backend`]).
 #[allow(dead_code)]
 fn venv_dir_name() -> &'static str {
     match test_backend().as_str() {
+        "jsd" | "jupyter-server-documents" => ".test-venv-jsd",
         "jupyter-collaboration" | "collab" => ".test-venv-collab",
+        "none" | "plain" => ".test-venv-plain",
         _ => ".test-venv",
     }
 }

@@ -58,12 +58,10 @@ jobs:
       uses: actions/cache@v4
       with:
         path: tests/.test-venv
-        key: ${{ runner.os }}-test-venv-${{ hashFiles('requirements.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-test-venv-
+        key: ${{ runner.os }}-test-venv-local-ipykernel
 
-    - name: Setup test environment
-      run: ./tests/setup_test_env.sh
+    - name: Setup test environment (local execution)
+      run: ./tests/setup_test_env.sh local
 
     - name: Build
       run: cargo build --verbose
@@ -73,16 +71,57 @@ jobs:
         echo "Running all tests..."
         cargo test --test integration_local_mode --verbose
         cargo test --test integration_execution --verbose
+        cargo test --test integration_env_kernels --verbose
         cargo test --bins --verbose
         echo "✅ All tests passed!"
 
-    # Connect-mode tests against jupyter-server-documents are not run in CI: they
-    # are known-flaky against that backend (tracked separately as #87/#90/#97),
-    # out of scope for this job. See the test-connect-collab job below for the
-    # jupyter-collaboration backend, which has its own pinned venv.
-    #
-    # - name: Run connect-mode tests (jupyter-server-documents)
-    #   run: NB_TEST_BACKEND=jsd cargo test --test integration_connect_mode -- --test-threads=1
+    # Connect-mode tests run in separate jobs (test-connect-*) with their own venvs.
+
+  test-connect-jsd:
+    name: test connect (jupyter-server-documents)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Rust cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        enable-cache: true
+
+    - name: Cache jsd test venv
+      uses: actions/cache@v4
+      with:
+        path: tests/.test-venv-jsd
+        key: ${{ runner.os }}-test-venv-jsd-jupyter-server-documents-0.2.5
+
+    - name: Setup test environment (jupyter-server-documents)
+      run: ./tests/setup_test_env.sh jsd
+
+    - name: Build
+      run: cargo build --verbose
+
+    - name: Run connect-mode tests (jupyter-server-documents)
+      run: NB_TEST_BACKEND=jsd cargo test --test integration_connect_mode -- --test-threads=1
 
   test-connect-collab:
     name: test connect (jupyter-collaboration)
@@ -134,6 +173,52 @@ jobs:
 
     - name: Run connect-mode tests (jupyter-collaboration)
       run: NB_TEST_BACKEND=jupyter-collaboration cargo test --test integration_connect_mode -- --test-threads=1
+
+  test-connect-plain:
+    name: test connect (no collab extension)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Rust cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        enable-cache: true
+
+    - name: Cache plain test venv
+      uses: actions/cache@v4
+      with:
+        path: tests/.test-venv-plain
+        key: ${{ runner.os }}-test-venv-plain-jupyter-server-2.20.0
+
+    - name: Setup test environment (no collab extension)
+      run: ./tests/setup_test_env.sh none
+
+    - name: Build
+      run: cargo build --verbose
+
+    - name: Run connect-mode tests (no collab extension)
+      run: NB_TEST_BACKEND=none cargo test --test integration_connect_mode -- --test-threads=1
 
   test-windows:
     name: test local (windows)
