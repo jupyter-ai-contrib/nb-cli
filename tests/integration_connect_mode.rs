@@ -567,8 +567,16 @@ fn test_restart_kernel_then_full_notebook_works() {
 
     // Step 2: full re-execution with --restart-kernel.
     // All cells are run in order from scratch, so cell-set runs before cell-use.
+    // Use a longer timeout: after a restart the kernel needs a full reconnect cycle
+    // before executing, which can exceed the 30s default on slow CI runners.
     let result = ctx
-        .run(&["execute", "test_restart_full.ipynb", "--restart-kernel"])
+        .run(&[
+            "execute",
+            "test_restart_full.ipynb",
+            "--restart-kernel",
+            "--timeout",
+            "60",
+        ])
         .assert_success();
 
     assert!(
