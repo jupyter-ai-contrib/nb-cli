@@ -607,6 +607,33 @@ fn test_execute_from_different_cwd() {
     );
 }
 
+/// Long-running cell: a 10-step loop with 1s sleep each step, printing progress.
+/// Verifies that execution doesn't time out mid-cell and that all 10 output lines
+/// are collected despite the no-output-cell Y.js fix (cells WITH output should
+/// also complete correctly across the full ~10s runtime).
+#[test]
+fn test_execute_long_running_cell() {
+    let Some(ctx) = TestCtx::new() else {
+        eprintln!("⚠️  Skipping connect-mode test: jupyter server not available");
+        return;
+    };
+
+    let _notebook =
+        ctx.copy_fixture_with_teardown("for_connect_long_running.ipynb", "test_long_running.ipynb");
+
+    let result = ctx
+        .run(&["execute", "test_long_running.ipynb"])
+        .assert_success();
+
+    for i in 0..10 {
+        assert!(
+            result.stdout.contains(&format!("step {i}")),
+            "Expected 'step {i}' in output\nStdout: {}",
+            result.stdout
+        );
+    }
+}
+
 // ==================== CLEAR OUTPUTS TESTS ====================
 
 /// Clear all outputs from a notebook in connect mode.
