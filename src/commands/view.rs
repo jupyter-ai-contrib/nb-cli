@@ -989,7 +989,10 @@ fn run_app<B: Backend>(
     terminal: &mut Terminal<B>,
     mut app: App,
     file_change_rx: mpsc::Receiver<()>,
-) -> io::Result<()> {
+) -> Result<(), B::Error>
+where
+    B::Error: From<io::Error>,
+{
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
 
