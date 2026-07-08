@@ -25,7 +25,7 @@
 mod test_helpers;
 
 use std::fs;
-use std::net::TcpListener;
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
@@ -35,7 +35,7 @@ use tempfile::TempDir;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
-// reqwest is a workspace dependency used for the server health-check poll.
+// reqwest is used for the externally-managed server health-check poll.
 use reqwest;
 
 // ==================== SERVER INFRASTRUCTURE ====================
@@ -144,12 +144,6 @@ fn start_shared_server() -> Option<SharedServerInfo> {
         return None;
     }
 
-    // Pick a free port.
-    let port = {
-        let listener = TcpListener::bind("127.0.0.1:0").ok()?;
-        listener.local_addr().ok()?.port()
-    };
-
     // Leak the TempDir so the directory persists for the lifetime of the process.
     // The OS will clean up the temp files on process exit.
     let server_root_tmp: &'static TempDir = Box::leak(Box::new(
@@ -159,24 +153,29 @@ fn start_shared_server() -> Option<SharedServerInfo> {
 
     let token = "nbtest123".to_string();
 
-    // Spawn the server.
+    // Spawn the server without --port so Jupyter picks its own free port,
+    // eliminating the TOCTOU race of pre-allocating a port with TcpListener.
     let mut cmd = Command::new(&jupyter_bin);
     cmd.args([
         "server",
         "--no-browser",
         &format!("--ServerApp.token={}", token),
         &format!("--ServerApp.root_dir={}", server_root.display()),
-        &format!("--port={}", port),
     ])
     .env("PATH", &venv_path_env)
     .env("VIRTUAL_ENV", &venv_root)
     .env_remove("PYTHONHOME")
+    // Force Python to flush stderr immediately even when writing to a pipe.
+    // Without this Python switches to full buffering and the startup log lines
+    // never arrive until the buffer fills, causing the URL reader to block.
+    .env("PYTHONUNBUFFERED", "1")
     // jupyter-collaboration's Y-store (.jupyter_ystore.db) is written relative to
     // the process cwd, not --ServerApp.root_dir; without this the shared test
     // server pollutes the crate root with that file on every run.
     .current_dir(&server_root)
     .stdout(std::process::Stdio::null())
-    .stderr(std::process::Stdio::null());
+    // Piped so we can read the bound URL from Jupyter's startup log.
+    .stderr(std::process::Stdio::piped());
 
     // Put the server in its own process group so cleanup can kill the whole
     // group (server + any kernels it spawned), not just the top-level process.
@@ -186,18 +185,48 @@ fn start_shared_server() -> Option<SharedServerInfo> {
         cmd.process_group(0);
     }
 
-    let child = cmd.spawn().ok()?;
+    let mut child = cmd.spawn().ok()?;
+
+    // Read stderr lines until Jupyter prints the bound 127.0.0.1 URL, which
+    // is the authoritative signal that the server is ready and listening.
+    // Jupyter always logs:
+    //   [I ... ServerApp] Jupyter Server X.Y is running at:
+    //   [I ... ServerApp]     http://127.0.0.1:PORT/?token=...
+    // We match the 127.0.0.1 line to extract the actual bound port.
+    let stderr = child.stderr.take()?;
+    let server_url = {
+        let reader = BufReader::new(stderr);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut found = None;
+        for line in reader.lines() {
+            if Instant::now() > deadline {
+                break;
+            }
+            let Ok(line) = line else { break };
+            if let Some(start) = line.find("http://127.0.0.1:") {
+                // Extract "http://127.0.0.1:PORT" — skip past "http://" before
+                // searching for the next '/' so we don't stop at the "://" itself.
+                let url_start = &line[start..];
+                let end = url_start[7..]
+                    .find('/')
+                    .map(|i| i + 7)
+                    .unwrap_or(url_start.len());
+                found = Some(url_start[..end].to_string());
+                break;
+            }
+        }
+        match found {
+            Some(url) => url,
+            None => {
+                eprintln!("⚠️  Jupyter Server did not print a bound URL in time — skipping connect-mode tests");
+                let _ = child.kill();
+                return None;
+            }
+        }
+    };
 
     // Leak the process guard so it lives until process exit (and kills the server).
     let _guard: &'static mut ServerKillGuard = Box::leak(Box::new(ServerKillGuard { child }));
-
-    let server_url = format!("http://127.0.0.1:{}", port);
-
-    // Poll until the server is ready (max 15 s).
-    if !wait_for_server(&server_url, &token, Duration::from_secs(15)) {
-        eprintln!("⚠️  Jupyter Server did not become ready in time — skipping connect-mode tests");
-        return None;
-    }
 
     let binary_path = env!("CARGO_BIN_EXE_nb").into();
 
