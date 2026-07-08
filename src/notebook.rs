@@ -11,11 +11,13 @@ pub fn read_notebook(path: impl AsRef<Path>) -> Result<Notebook> {
 
     match notebook {
         nbformat::Notebook::V4(nb) => Ok(nb),
+        nbformat::Notebook::V4QuirksMode(quirks) => Ok(quirks.repair()),
         nbformat::Notebook::Legacy(legacy) => nbformat::upgrade_legacy_notebook(legacy)
             .context("Failed to upgrade legacy notebook to v4.5"),
         nbformat::Notebook::V3(v3) => {
             nbformat::upgrade_v3_notebook(v3).context("Failed to upgrade v3 notebook to v4.5")
         }
+        _ => anyhow::bail!("Unsupported notebook format"),
     }
 }
 

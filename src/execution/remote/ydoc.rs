@@ -285,7 +285,7 @@ impl YDocClient {
         msg.extend_from_slice(&sv_bytes);
 
         self.ws
-            .send(Message::Binary(msg))
+            .send(Message::binary(msg))
             .await
             .context("Failed to send SyncStep1")?;
 
@@ -346,7 +346,7 @@ impl YDocClient {
                             };
 
                             self.ws
-                                .send(Message::Binary(response))
+                                .send(Message::binary(response))
                                 .await
                                 .context("Failed to send SyncStep2")?;
                         }
@@ -461,7 +461,7 @@ impl YDocClient {
                         };
 
                         self.ws
-                            .send(Message::Binary(response))
+                            .send(Message::binary(response))
                             .await
                             .context("Failed to send SyncStep2")?;
 
@@ -496,7 +496,7 @@ impl YDocClient {
         };
 
         self.ws
-            .send(Message::Binary(msg))
+            .send(Message::binary(msg))
             .await
             .context("Failed to send update to server")?;
 
@@ -556,7 +556,7 @@ impl YDocClient {
                     buf.extend_from_slice(&update);
                     buf
                 };
-                self.ws.send(Message::Binary(response)).await?;
+                self.ws.send(Message::binary(response)).await?;
                 Ok(false)
             }
             1 | 2 => {

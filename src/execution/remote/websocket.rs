@@ -281,7 +281,7 @@ impl KernelWebSocket {
             .context("Failed to serialize execute request")?;
 
         self.write
-            .send(Message::Binary(binary_data))
+            .send(Message::binary(binary_data))
             .await
             .context("Failed to send execute request")?;
 
@@ -363,8 +363,10 @@ mod tests {
             ),
             Err(e) => e,
         };
+        let full = format!("{:#}", err);
         assert!(
-            err.to_string().contains("WebSocket v1 kernel protocol"),
+            full.contains("WebSocket v1 kernel protocol")
+                || full.to_lowercase().contains("subprotocol"),
             "unexpected error: {}",
             err
         );
@@ -374,9 +376,8 @@ mod tests {
     async fn connect_rejects_server_without_v1_subprotocol() {
         // accept_async completes the WebSocket handshake without echoing any
         // subprotocol, which is how a legacy/incompatible server responds.
-        // Note: tungstenite 0.23+ rejects missing subprotocols client-side with
-        // SubProtocolError; on a dependency bump this assertion's message check
-        // needs updating, but the rejection itself remains.
+        // tungstenite 0.22+ rejects missing subprotocols client-side with
+        // SubProtocolError before our own header check runs.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -392,8 +393,10 @@ mod tests {
             Ok(_) => panic!("connect must fail when the server does not accept the v1 subprotocol"),
             Err(e) => e,
         };
+        let full = format!("{:#}", err);
         assert!(
-            err.to_string().contains("WebSocket v1 kernel protocol"),
+            full.contains("WebSocket v1 kernel protocol")
+                || full.to_lowercase().contains("subprotocol"),
             "unexpected error: {}",
             err
         );

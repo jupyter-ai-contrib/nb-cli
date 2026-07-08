@@ -543,7 +543,7 @@ fn externalize_output(content: &[u8], mime: &str, output_dir: &Path) -> Result<P
     let mut hasher = Sha256::new();
     hasher.update(content);
     let hash_bytes = hasher.finalize();
-    let hash_hex = format!("{:x}", hash_bytes);
+    let hash_hex: String = hash_bytes.iter().map(|b| format!("{:02x}", b)).collect();
 
     // Use first 16 characters of hash for filename (64 bits, enough to avoid collisions)
     let hash_prefix = &hash_hex[..16];
