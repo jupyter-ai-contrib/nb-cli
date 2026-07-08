@@ -159,11 +159,13 @@ impl RemoteExecutor {
                 }
             }
 
-            // jupyter-collaboration never writes outputs to Y.js itself, so
-            // once the kernel is idle, write our own kernel-WS-collected
-            // outputs and let the read loop above pick them up next
-            // iteration.
-            if client_writes_outputs && idle_received && !ec_ready && !kernel_outputs.is_empty() {
+            // jupyter-collaboration never writes outputs or execution_count to
+            // Y.js itself, so once the kernel is idle we must do it. This also
+            // covers cells with no output: without this branch, a no-output cell
+            // would fall through to the ydoc.recv_update() wait below and block
+            // for the entire execution timeout (120s+), during which the server's
+            // 30s WebSocket ping kills the kernel connection for subsequent cells.
+            if client_writes_outputs && idle_received && !ec_ready && expected_ec.is_some() {
                 ydoc.update_cell_outputs(cell_idx, kernel_outputs.clone())?;
                 ydoc.update_cell_execution_count(cell_idx, expected_ec)?;
                 ydoc.sync().await?;
