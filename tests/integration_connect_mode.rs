@@ -571,6 +571,11 @@ fn test_restart_kernel_then_full_notebook_works() {
     ctx.run(&["execute", "test_restart_full.ipynb"])
         .assert_success();
 
+    // Give the kernel a moment to settle before restarting: on slow CI runners
+    // the restart polling may see "idle" before the kernel is truly ready to
+    // process execute requests.
+    std::thread::sleep(Duration::from_secs(3));
+
     // Step 2: full re-execution with --restart-kernel.
     // All cells are run in order from scratch, so cell-set runs before cell-use.
     let result = ctx
