@@ -97,6 +97,22 @@ pub struct YDocClient {
     server_writes_outputs: bool,
 }
 
+/// Probe whether a Y.js-capable collaboration backend is available on the
+/// server — either jupyter-server-documents (FileID index) or
+/// jupyter-collaboration (session endpoint). Shares `YDocClient::get_file_id`'s
+/// two-tier check so this probe and the one `RemoteExecutor::start` performs
+/// at actual execute time can never disagree about backend availability.
+///
+/// Probes with the server root path (`""`), which always exists, so the
+/// index/session call is idempotent and creates no record for a fake path.
+pub async fn probe_ydoc_available(server_url: &str, token: &str) -> Result<bool> {
+    match YDocClient::get_file_id(server_url, token, "").await {
+        Ok(_) => Ok(true),
+        Err(e) if is_yjs_unavailable(&e) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
 impl YDocClient {
     /// Connect to Y.js room for the given notebook
     pub async fn connect(server_url: String, token: String, notebook_path: String) -> Result<Self> {
@@ -767,6 +783,33 @@ mod fileid_classification_tests {
             "500 must be a hard error, not YjsUnavailable, got: {}",
             err
         );
+    }
+
+    #[tokio::test]
+    async fn probe_ydoc_available_true_for_jupyter_server_documents() {
+        let url = fileid_stub(200).await;
+        assert_eq!(super::probe_ydoc_available(&url, "t").await.unwrap(), true);
+    }
+
+    #[tokio::test]
+    async fn probe_ydoc_available_true_for_jupyter_collaboration_fallback() {
+        // fileid/index 404s, collaboration/session succeeds — same two-tier
+        // check as get_file_id, so this and the connect-time cache can never
+        // disagree with what execute-time discovery finds.
+        let url = collab_session_stub().await;
+        assert_eq!(super::probe_ydoc_available(&url, "t").await.unwrap(), true);
+    }
+
+    #[tokio::test]
+    async fn probe_ydoc_available_false_when_no_backend() {
+        let url = fileid_stub(404).await;
+        assert_eq!(super::probe_ydoc_available(&url, "t").await.unwrap(), false);
+    }
+
+    #[tokio::test]
+    async fn probe_ydoc_available_is_hard_error_on_500() {
+        let url = fileid_stub(500).await;
+        assert!(super::probe_ydoc_available(&url, "t").await.is_err());
     }
 
     #[test]

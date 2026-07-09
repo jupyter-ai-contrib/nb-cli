@@ -1,7 +1,8 @@
 use crate::commands::common::{self, OutputFormat};
-use crate::commands::markdown_renderer;
+use crate::commands::output::markdown_renderer;
 use crate::execution::{create_backend, types::ExecutionConfig, types::ExecutionMode};
-use crate::notebook::{read_notebook, write_notebook_atomic};
+use crate::notebook::session::load_notebook;
+use crate::notebook::write_notebook_atomic;
 use anyhow::{Context, Result};
 use clap::Args;
 use nbformat::v4::Cell;
@@ -102,7 +103,7 @@ pub fn execute(args: ExecuteNotebookArgs) -> Result<()> {
 }
 
 async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
-    use crate::commands::env_manager::EnvConfig;
+    use crate::execution::env::EnvConfig;
 
     let format = if args.json {
         OutputFormat::Json
@@ -140,8 +141,8 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     // For remote mode, compute the server-relative path once and reuse it
     // for both the Contents API read and the session identifier.
     let server_path = if matches!(mode, ExecutionMode::Remote { .. }) {
-        let server_root = common::resolve_server_root();
-        Some(common::notebook_path_for_server(
+        let server_root = crate::notebook::remote::resolve_server_root();
+        Some(crate::notebook::remote::notebook_path_for_server(
             &file_path,
             server_root.as_deref(),
         ))
@@ -150,19 +151,9 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
     };
 
     // Read notebook from the appropriate source
-    let mut notebook = match &mode {
-        ExecutionMode::Remote { server_url, token } => {
-            common::read_notebook_remote(
-                server_url,
-                token,
-                server_path.as_deref().expect("set for Remote mode"),
-            )
-            .await?
-        }
-        ExecutionMode::Local | ExecutionMode::RemoteKernel { .. } => {
-            read_notebook(&file_path).context("Failed to read notebook")?
-        }
-    };
+    let mut notebook = load_notebook(&file_path, &mode)
+        .await
+        .context("Failed to read notebook")?;
 
     // Determine cell range
     let (start_idx, end_idx) = if let Some(ref cell_id) = args.cell {
@@ -364,15 +355,13 @@ async fn execute_async(args: ExecuteNotebookArgs) -> Result<()> {
             server_url, token, ..
         } => {
             if !server_persists_outputs {
-                let client = crate::execution::remote::client::JupyterClient::new(
+                let client = crate::execution::server::client::JupyterClient::new(
                     server_url.clone(),
                     token.clone(),
                 )?;
-                let server_root = common::resolve_server_root();
-                let save_path =
-                    common::notebook_path_for_server(&file_path, server_root.as_deref());
+                let save_path = server_path.as_deref().expect("set for Remote mode");
                 client
-                    .save_notebook(&save_path, &notebook)
+                    .save_notebook(save_path, &notebook)
                     .await
                     .context("Failed to save notebook to server")?;
             }

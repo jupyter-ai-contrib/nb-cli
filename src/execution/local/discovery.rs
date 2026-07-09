@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use std::fs;
 use std::path::PathBuf;
 
-use crate::commands::env_manager::EnvConfig;
+use crate::execution::env::EnvConfig;
 
 /// Find a kernel specification
 ///

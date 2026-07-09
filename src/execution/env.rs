@@ -21,6 +21,27 @@ impl EnvManager {
             EnvManager::Pixi => "pixi",
         }
     }
+
+    /// Command prefix to run Python/Jupyter under this environment manager,
+    /// e.g. "uv run". Empty for `Direct`.
+    pub fn run_prefix(&self) -> &'static str {
+        match self {
+            EnvManager::Direct => "",
+            EnvManager::Uv => "uv run",
+            EnvManager::Pixi => "pixi run",
+        }
+    }
+
+    /// Parse the string previously produced by `as_str`, as stored in the
+    /// saved connection config (`JupyterConnection::env_manager`).
+    pub fn parse_saved(s: &str) -> Option<EnvManager> {
+        match s {
+            "direct" => Some(EnvManager::Direct),
+            "uv" => Some(EnvManager::Uv),
+            "pixi" => Some(EnvManager::Pixi),
+            _ => None,
+        }
+    }
 }
 
 impl std::fmt::Display for EnvManager {

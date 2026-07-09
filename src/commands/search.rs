@@ -1,6 +1,6 @@
 use crate::commands::common::{self, OutputFormat};
-use crate::commands::markdown_renderer::{self, IndexedCell};
-use crate::notebook;
+use crate::commands::output::markdown_renderer::{self, IndexedCell};
+use crate::notebook::{self, session::load_notebook};
 use anyhow::{bail, Result};
 use clap::{Parser, ValueEnum};
 use jupyter_protocol::media::Media;
@@ -111,18 +111,6 @@ pub fn execute(args: SearchArgs) -> Result<()> {
     // Read notebook from server when connected, otherwise from local filesystem
     let mode = common::resolve_execution_mode(None, None)?;
     let notebook = match &mode {
-        crate::execution::types::ExecutionMode::Remote { server_url, token } => {
-            let server_root = common::resolve_server_root();
-            let server_path = common::notebook_path_for_server(&file_path, server_root.as_deref());
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            runtime.block_on(common::read_notebook_remote(
-                server_url,
-                token,
-                &server_path,
-            ))?
-        }
         crate::execution::types::ExecutionMode::Local
         | crate::execution::types::ExecutionMode::RemoteKernel { .. } => {
             // Phase 1: Text pre-filter - quick scan of raw file
@@ -132,6 +120,12 @@ pub fn execute(args: SearchArgs) -> Result<()> {
                 return Ok(());
             }
             notebook::read_notebook(&file_path)?
+        }
+        crate::execution::types::ExecutionMode::Remote { .. } => {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(load_notebook(&file_path, &mode))?
         }
     };
     let mut results = Vec::new();
@@ -164,7 +158,7 @@ pub fn execute(args: SearchArgs) -> Result<()> {
             results.push(SearchResult {
                 cell_index: index,
                 cell_id: common::cell_id_to_string(cell),
-                cell_type: get_cell_type_name(cell),
+                cell_type: common::cell_type_str(cell).to_string(),
                 matches: cell_matches,
             });
         }
@@ -189,24 +183,10 @@ fn execute_with_errors(args: &SearchArgs) -> Result<()> {
 
     // Read notebook from server when connected, otherwise from local filesystem
     let mode = common::resolve_execution_mode(None, None)?;
-    let notebook = match &mode {
-        crate::execution::types::ExecutionMode::Remote { server_url, token } => {
-            let server_root = common::resolve_server_root();
-            let server_path = common::notebook_path_for_server(&file_path, server_root.as_deref());
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            runtime.block_on(common::read_notebook_remote(
-                server_url,
-                token,
-                &server_path,
-            ))?
-        }
-        crate::execution::types::ExecutionMode::Local
-        | crate::execution::types::ExecutionMode::RemoteKernel { .. } => {
-            notebook::read_notebook(&file_path)?
-        }
-    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let notebook = runtime.block_on(load_notebook(&file_path, &mode))?;
     let mut results = Vec::new();
 
     // Build regex if pattern is provided
@@ -262,7 +242,7 @@ fn execute_with_errors(args: &SearchArgs) -> Result<()> {
                 results.push(SearchResult {
                     cell_index: index,
                     cell_id: common::cell_id_to_string(cell),
-                    cell_type: get_cell_type_name(cell),
+                    cell_type: common::cell_type_str(cell).to_string(),
                     matches: cell_matches,
                 });
             }
@@ -300,14 +280,6 @@ fn should_search_output(scope: &SearchScope) -> bool {
     matches!(scope, SearchScope::Output | SearchScope::All)
 }
 
-fn get_cell_type_name(cell: &Cell) -> String {
-    match cell {
-        Cell::Code { .. } => "code".to_string(),
-        Cell::Markdown { .. } => "markdown".to_string(),
-        Cell::Raw { .. } => "raw".to_string(),
-    }
-}
-
 fn find_matches(re: &Regex, text: &str, location: &str) -> Vec<Match> {
     let mut matches = Vec::new();
 
@@ -340,6 +312,12 @@ fn extract_output_text(output: &Output) -> String {
     }
 }
 
+/// Search-oriented mime selection: prefers plain text for greppability,
+/// unlike `markdown_renderer::render_output_data`'s display-oriented
+/// priority list (which prefers rich media for rendering fidelity). This is
+/// an intentional divergence, not duplication to be merged — matching
+/// against HTML markup instead of plain text would silently change search
+/// results for outputs that carry both representations.
 fn extract_media_text(media: &Media) -> String {
     if let Ok(json_val) = serde_json::to_value(media) {
         if let Some(obj) = json_val.as_object() {
@@ -566,7 +544,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_cell_type_name() {
+    fn test_cell_type_str() {
         let code_cell = Cell::Code {
             id: CellId::from(Uuid::new_v4()),
             metadata: create_empty_metadata(),
@@ -574,6 +552,6 @@ mod tests {
             source: vec![],
             outputs: vec![],
         };
-        assert_eq!(get_cell_type_name(&code_cell), "code");
+        assert_eq!(common::cell_type_str(&code_cell), "code");
     }
 }

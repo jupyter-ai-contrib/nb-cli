@@ -38,11 +38,11 @@ enum Commands {
         command: OutputCommands,
     },
     /// Connect to a Jupyter server
-    Connect(commands::connect::ConnectArgs),
+    Connect(commands::connection::connect::ConnectArgs),
     /// Show connection status
-    Status(commands::status::StatusArgs),
+    Status(commands::connection::status::StatusArgs),
     /// Disconnect from Jupyter server
-    Disconnect(commands::disconnect::DisconnectArgs),
+    Disconnect(commands::connection::disconnect::DisconnectArgs),
     /// Manage nb CLI (version, update)
     #[command(name = "self")]
     SelfCmd {
@@ -54,19 +54,19 @@ enum Commands {
 #[derive(Subcommand)]
 enum CellCommands {
     /// Add a new cell to a notebook
-    Add(commands::add_cell::AddCellArgs),
+    Add(commands::cell::add::AddCellArgs),
     /// Update an existing cell
-    Update(commands::update_cell::UpdateCellArgs),
+    Update(commands::cell::update::UpdateCellArgs),
     /// Delete cells from a notebook
-    Delete(commands::delete_cell::DeleteCellArgs),
+    Delete(commands::cell::delete::DeleteCellArgs),
 }
 
 #[derive(Subcommand)]
 enum OutputCommands {
     /// Clear outputs from code cells
-    Clear(commands::clear_outputs::ClearOutputsArgs),
+    Clear(commands::output::clear::ClearOutputsArgs),
     /// Remove all externalized output files from the temp directory
-    Clean(commands::clean_output_dirs::CleanOutputDirsArgs),
+    Clean(commands::output::clean::CleanOutputDirsArgs),
 }
 
 fn main() {
@@ -79,17 +79,17 @@ fn main() {
         Commands::Execute(args) => commands::execute_notebook::execute(args),
         Commands::Search(args) => commands::search::execute(args),
         Commands::Cell { command } => match command {
-            CellCommands::Add(args) => commands::add_cell::execute(args),
-            CellCommands::Update(args) => commands::update_cell::execute(args),
-            CellCommands::Delete(args) => commands::delete_cell::execute(args),
+            CellCommands::Add(args) => commands::cell::add::execute(args),
+            CellCommands::Update(args) => commands::cell::update::execute(args),
+            CellCommands::Delete(args) => commands::cell::delete::execute(args),
         },
         Commands::Output { command } => match command {
-            OutputCommands::Clear(args) => commands::clear_outputs::execute(args),
-            OutputCommands::Clean(args) => commands::clean_output_dirs::execute(args),
+            OutputCommands::Clear(args) => commands::output::clear::execute(args),
+            OutputCommands::Clean(args) => commands::output::clean::execute(args),
         },
-        Commands::Connect(args) => commands::connect::execute(args),
-        Commands::Status(args) => commands::status::execute(args),
-        Commands::Disconnect(args) => commands::disconnect::execute(args),
+        Commands::Connect(args) => commands::connection::connect::execute(args),
+        Commands::Status(args) => commands::connection::status::execute(args),
+        Commands::Disconnect(args) => commands::connection::disconnect::execute(args),
         Commands::SelfCmd { command } => commands::self_cmd::execute(command),
     };
 

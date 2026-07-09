@@ -1,12 +1,10 @@
 use super::discovery::find_kernel;
-use crate::commands::env_manager::EnvManager;
-use crate::execution::types::{ExecutionConfig, ExecutionError, ExecutionResult};
+use crate::execution::env::EnvManager;
+use crate::execution::output_collector::KernelOutputCollector;
+use crate::execution::types::{ExecutionConfig, ExecutionResult};
 use crate::execution::ExecutionBackend;
 use anyhow::{Context, Result};
-use jupyter_protocol::{
-    ConnectionInfo, ExecuteRequest, ExecutionState, JupyterKernelspec, JupyterMessage,
-    JupyterMessageContent,
-};
+use jupyter_protocol::{ConnectionInfo, ExecuteRequest, JupyterKernelspec, JupyterMessage};
 use std::ffi::OsStr;
 use std::path::PathBuf;
 
@@ -74,13 +72,9 @@ impl LocalExecutor {
             .await
             .context("Failed to send execute request")?;
 
-        // Collect outputs from IOPub
-        let mut outputs = Vec::new();
-        let mut execution_count = None;
-        let mut error_info: Option<ExecutionError> = None;
-
         let timeout = self.config.timeout;
         let deadline = tokio::time::Instant::now() + timeout;
+        let mut collector = KernelOutputCollector::new();
 
         loop {
             // Check timeout
@@ -110,95 +104,36 @@ impl LocalExecutor {
                 continue;
             }
 
-            match message.content {
-                JupyterMessageContent::Status(status)
-                    if status.execution_state == ExecutionState::Idle =>
-                {
-                    // Execution complete on IOPub
-                    break;
-                }
-                JupyterMessageContent::StreamContent(stream) => {
-                    // Convert to nbformat output
-                    let name = match stream.name {
-                        jupyter_protocol::Stdio::Stdout => "stdout".to_string(),
-                        jupyter_protocol::Stdio::Stderr => "stderr".to_string(),
-                    };
-                    let output = nbformat::v4::Output::Stream {
-                        name,
-                        text: nbformat::v4::MultilineString(stream.text),
-                    };
-                    outputs.push(output);
-                }
-                JupyterMessageContent::ExecuteResult(result) => {
-                    execution_count = Some(result.execution_count.value() as i64);
-                    // Convert to nbformat output
-                    let json = serde_json::json!({
-                        "output_type": "execute_result",
-                        "execution_count": result.execution_count.value(),
-                        "data": result.data,
-                        "metadata": result.metadata
-                    });
-                    if let Ok(output) = serde_json::from_value(json) {
-                        outputs.push(output);
+            if collector.handle(message.content, None) {
+                break;
+            }
+        }
+
+        let mut result = collector.into_result();
+
+        // Read execute_reply from shell channel to get execution_count.
+        // This is important for cells that don't produce output (no ExecuteResult):
+        // KernelOutputCollector already handles an inline ExecuteReply on the same
+        // channel, but local mode's reply arrives on the separate shell socket.
+        if result.execution_count.is_none() {
+            match tokio::time::timeout_at(deadline, shell_socket.read()).await {
+                Ok(Ok(reply)) => {
+                    if let jupyter_protocol::JupyterMessageContent::ExecuteReply(reply_content) =
+                        reply.content
+                    {
+                        result.execution_count = Some(reply_content.execution_count.value() as i64);
                     }
                 }
-                JupyterMessageContent::DisplayData(display) => {
-                    // Convert to nbformat output
-                    let json = serde_json::json!({
-                        "output_type": "display_data",
-                        "data": display.data,
-                        "metadata": display.metadata
-                    });
-                    if let Ok(output) = serde_json::from_value(json) {
-                        outputs.push(output);
-                    }
+                Ok(Err(e)) => {
+                    eprintln!("Warning: Failed to read execute_reply: {}", e);
                 }
-                JupyterMessageContent::ErrorOutput(error) => {
-                    // Store error info
-                    error_info = Some(ExecutionError {
-                        ename: error.ename.clone(),
-                        evalue: error.evalue.clone(),
-                        traceback: error.traceback.clone(),
-                    });
-                    // Also add as output
-                    let output = nbformat::v4::Output::Error(nbformat::v4::ErrorOutput {
-                        ename: error.ename,
-                        evalue: error.evalue,
-                        traceback: error.traceback,
-                    });
-                    outputs.push(output);
-                }
-                _ => {
-                    // Ignore other message types
+                Err(_) => {
+                    eprintln!("Warning: Timeout reading execute_reply");
                 }
             }
         }
 
-        // Read execute_reply from shell channel to get execution_count
-        // This is important for cells that don't produce output (no ExecuteResult)
-        match tokio::time::timeout_at(deadline, shell_socket.read()).await {
-            Ok(Ok(reply)) => {
-                if let JupyterMessageContent::ExecuteReply(reply_content) = reply.content {
-                    // Use execution_count from reply if we don't have one yet
-                    if execution_count.is_none() {
-                        execution_count = Some(reply_content.execution_count.value() as i64);
-                    }
-                }
-            }
-            Ok(Err(e)) => {
-                eprintln!("Warning: Failed to read execute_reply: {}", e);
-            }
-            Err(_) => {
-                eprintln!("Warning: Timeout reading execute_reply");
-            }
-        }
-
-        // Build result
-        if let Some(error) = error_info {
-            Ok(ExecutionResult::error(outputs, execution_count, error))
-        } else {
-            Ok(ExecutionResult::success(outputs, execution_count))
-        }
+        Ok(result)
     }
 }
 

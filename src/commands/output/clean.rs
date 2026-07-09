@@ -1,5 +1,5 @@
-use crate::commands::common::OutputFormat;
-use crate::commands::markdown_renderer;
+use crate::commands::common::{self, OutputFormat};
+use crate::commands::output::markdown_renderer;
 use anyhow::Result;
 use clap::Parser;
 use serde::Serialize;
@@ -35,18 +35,11 @@ pub fn execute(args: CleanOutputDirsArgs) -> Result<()> {
         OutputFormat::Text
     };
 
-    match format {
-        OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(&result)?);
+    common::print_result(&result, &format, |result| {
+        if existed {
+            println!("Cleaned output directory: {}", result.path);
+        } else {
+            println!("No output directory to clean ({})", result.path);
         }
-        OutputFormat::Text | OutputFormat::Markdown => {
-            if existed {
-                println!("Cleaned output directory: {}", result.path);
-            } else {
-                println!("No output directory to clean ({})", result.path);
-            }
-        }
-    }
-
-    Ok(())
+    })
 }

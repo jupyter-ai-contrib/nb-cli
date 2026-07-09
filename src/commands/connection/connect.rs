@@ -1,6 +1,6 @@
-use crate::commands::env_manager::{EnvConfig, EnvManager};
 use crate::config::{Config, JupyterConnection};
-use crate::execution::remote::client::JupyterClient;
+use crate::execution::env::{EnvConfig, EnvManager};
+use crate::execution::server::client::JupyterClient;
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use clap::Args;
@@ -122,10 +122,9 @@ async fn execute_async(args: ConnectArgs) -> Result<()> {
     let ydoc_available = if args.skip_validation {
         None
     } else {
-        match JupyterClient::new(selected.url.clone(), selected.token.clone()) {
-            Ok(client) => client.probe_ydoc().await.ok(),
-            Err(_) => None,
-        }
+        crate::execution::server::ydoc::probe_ydoc_available(&selected.url, &selected.token)
+            .await
+            .ok()
     };
 
     // Create connection
@@ -207,7 +206,9 @@ async fn connect_manual(server_url: String, token: String, skip_validation: bool
     let ydoc_available = if skip_validation {
         None
     } else {
-        client.probe_ydoc().await.ok()
+        crate::execution::server::ydoc::probe_ydoc_available(&server_url, &token)
+            .await
+            .ok()
     };
 
     // Create connection

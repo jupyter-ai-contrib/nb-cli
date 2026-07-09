@@ -4,9 +4,11 @@
 //! - **Local**: Direct kernel connection using runtimelib + ZMQ
 //! - **Remote**: Jupyter Server API using HTTP + WebSocket
 
+pub mod env;
+pub mod gateway;
 pub mod local;
-pub mod remote;
-pub mod remote_kernel;
+pub mod output_collector;
+pub mod server;
 pub mod types;
 
 use anyhow::Result;
@@ -53,7 +55,7 @@ pub trait ExecutionBackend: Send {
 pub fn create_backend(config: ExecutionConfig) -> Result<Box<dyn ExecutionBackend>> {
     match config.mode.clone() {
         ExecutionMode::Local => Ok(Box::new(local::LocalExecutor::new(config)?)),
-        ExecutionMode::Remote { server_url, token } => Ok(Box::new(remote::RemoteExecutor::new(
+        ExecutionMode::Remote { server_url, token } => Ok(Box::new(server::RemoteExecutor::new(
             config, server_url, token,
         )?)),
         ExecutionMode::RemoteKernel {
@@ -61,7 +63,7 @@ pub fn create_backend(config: ExecutionConfig) -> Result<Box<dyn ExecutionBacken
             token,
             kernel_id,
             auth_scheme,
-        } => Ok(Box::new(remote_kernel::RemoteKernelExecutor::new(
+        } => Ok(Box::new(gateway::RemoteKernelExecutor::new(
             config,
             gateway_url,
             token,

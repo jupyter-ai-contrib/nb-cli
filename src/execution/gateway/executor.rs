@@ -1,10 +1,10 @@
 //! Remote kernel (Jupyter Kernel Gateway) execution backend.
 
-use crate::execution::remote::websocket::KernelWebSocket;
-use crate::execution::types::{ExecutionConfig, ExecutionError, ExecutionResult};
+use crate::execution::output_collector::KernelOutputCollector;
+use crate::execution::server::websocket::KernelWebSocket;
+use crate::execution::types::{ExecutionConfig, ExecutionResult};
 use crate::execution::{ExecutionBackend, OutputCallback};
 use anyhow::{Context, Result};
-use jupyter_protocol::messaging::JupyterMessageContent;
 use serde::Deserialize;
 
 /// Minimal subset of the Jupyter Kernel Gateway's `/api/kernels` response.
@@ -159,13 +159,9 @@ impl RemoteKernelExecutor {
             .await
             .context("Failed to send execute request")?;
 
-        let mut outputs = Vec::new();
-        let mut execution_count: Option<i64> = None;
-        let mut error_info: Option<ExecutionError> = None;
-        let mut saw_busy = false;
-
         let timeout = self.config.timeout;
         let deadline = tokio::time::Instant::now() + timeout;
+        let mut collector = KernelOutputCollector::new();
 
         loop {
             if tokio::time::Instant::now() > deadline {
@@ -190,86 +186,12 @@ impl RemoteKernelExecutor {
                 continue;
             }
 
-            match &message.content {
-                JupyterMessageContent::Status(status) => match status.execution_state {
-                    jupyter_protocol::ExecutionState::Busy => {
-                        saw_busy = true;
-                    }
-                    jupyter_protocol::ExecutionState::Idle if saw_busy => {
-                        break;
-                    }
-                    _ => {}
-                },
-                JupyterMessageContent::StreamContent(stream) => {
-                    let name = match stream.name {
-                        jupyter_protocol::Stdio::Stdout => "stdout".to_string(),
-                        jupyter_protocol::Stdio::Stderr => "stderr".to_string(),
-                    };
-                    let output = nbformat::v4::Output::Stream {
-                        name,
-                        text: nbformat::v4::MultilineString(stream.text.clone()),
-                    };
-                    if let Some(cb) = on_output {
-                        cb(&output);
-                    }
-                    outputs.push(output);
-                }
-                JupyterMessageContent::ExecuteResult(result) => {
-                    execution_count = Some(result.execution_count.value() as i64);
-                    let json = serde_json::json!({
-                        "output_type": "execute_result",
-                        "execution_count": result.execution_count.value(),
-                        "data": result.data,
-                        "metadata": result.metadata
-                    });
-                    if let Ok(output) = serde_json::from_value::<nbformat::v4::Output>(json) {
-                        if let Some(cb) = on_output {
-                            cb(&output);
-                        }
-                        outputs.push(output);
-                    }
-                }
-                JupyterMessageContent::DisplayData(display) => {
-                    let json = serde_json::json!({
-                        "output_type": "display_data",
-                        "data": display.data,
-                        "metadata": display.metadata
-                    });
-                    if let Ok(output) = serde_json::from_value::<nbformat::v4::Output>(json) {
-                        if let Some(cb) = on_output {
-                            cb(&output);
-                        }
-                        outputs.push(output);
-                    }
-                }
-                JupyterMessageContent::ErrorOutput(error) => {
-                    error_info = Some(ExecutionError {
-                        ename: error.ename.clone(),
-                        evalue: error.evalue.clone(),
-                        traceback: error.traceback.clone(),
-                    });
-                    let output = nbformat::v4::Output::Error(nbformat::v4::ErrorOutput {
-                        ename: error.ename.clone(),
-                        evalue: error.evalue.clone(),
-                        traceback: error.traceback.clone(),
-                    });
-                    if let Some(cb) = on_output {
-                        cb(&output);
-                    }
-                    outputs.push(output);
-                }
-                JupyterMessageContent::ExecuteReply(reply) if execution_count.is_none() => {
-                    execution_count = Some(reply.execution_count.value() as i64);
-                }
-                _ => {}
+            if collector.handle(message.content, on_output) {
+                break;
             }
         }
 
-        if let Some(error) = error_info {
-            Ok(ExecutionResult::error(outputs, execution_count, error))
-        } else {
-            Ok(ExecutionResult::success(outputs, execution_count))
-        }
+        Ok(collector.into_result())
     }
 }
 
