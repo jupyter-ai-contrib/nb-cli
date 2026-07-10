@@ -41,6 +41,27 @@ impl RemoteExecutor {
             created_session: false,
         })
     }
+
+    async fn reconnect_kernel_ws(&mut self) -> Result<()> {
+        if let Some(ws) = self.ws.take() {
+            let _ = ws.close().await;
+        }
+
+        let client = self
+            .client
+            .as_ref()
+            .context("Jupyter client not connected")?;
+        let session = self
+            .session
+            .as_ref()
+            .context("Jupyter session not available")?;
+        let ws_url = client.get_ws_url(&session.kernel.id, Some(&session.id));
+        let ws = KernelWebSocket::connect(&ws_url)
+            .await
+            .context("Failed to reconnect to kernel WebSocket")?;
+        self.ws = Some(ws);
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -164,6 +185,13 @@ impl ExecutionBackend for RemoteExecutor {
         on_output: Option<&crate::execution::OutputCallback>,
     ) -> Result<ExecutionResult> {
         if self.ydoc.is_some() {
+            if self
+                .ydoc
+                .as_ref()
+                .is_some_and(|ydoc| ydoc.server_writes_outputs())
+            {
+                self.reconnect_kernel_ws().await?;
+            }
             ydoc_execution::execute_code_ydoc(self, code, cell_id, cell_index, on_output).await
         } else {
             kernel_ws_execution::execute_code_kernel_ws(self, code, cell_id, on_output).await

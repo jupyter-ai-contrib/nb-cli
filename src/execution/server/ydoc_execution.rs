@@ -63,6 +63,29 @@ fn kernel_msg_to_output(content: &JupyterMessageContent) -> Option<nbformat::v4:
     }
 }
 
+fn result_from_outputs(
+    outputs: Vec<nbformat::v4::Output>,
+    execution_count: Option<i64>,
+) -> ExecutionResult {
+    let error_info = outputs.iter().find_map(|o| {
+        if let nbformat::v4::Output::Error(err) = o {
+            Some(ExecutionError {
+                ename: err.ename.clone(),
+                evalue: err.evalue.clone(),
+                traceback: err.traceback.clone(),
+            })
+        } else {
+            None
+        }
+    });
+
+    if let Some(error_info) = error_info {
+        ExecutionResult::error(outputs, execution_count, error_info)
+    } else {
+        ExecutionResult::success(outputs, execution_count)
+    }
+}
+
 /// Y.js-based output collection (collaboration server)
 pub(super) async fn execute_code_ydoc(
     executor: &mut RemoteExecutor,
@@ -77,10 +100,19 @@ pub(super) async fn execute_code_ydoc(
         .ydoc
         .as_mut()
         .context("Y.js client not connected")?;
+    let initial_execution_count = ydoc
+        .read_cell_outputs(cell_idx)
+        .ok()
+        .and_then(|d| d.execution_count);
     let http = reqwest::Client::new();
     // jupyter-collaboration doesn't write outputs to Y.js itself, so once
     // the kernel goes idle we write our own kernel-WS-collected outputs
     // and let the read loop below pick them back up from the doc.
+    //
+    // jupyter-server-documents writes outputs to Y.js, while its kernel
+    // WebSocket can intermittently miss idle/status or close between cells.
+    // Use whichever completion/output signals arrive, and require a short
+    // quiet period before treating JSD's Y.js output stream as complete.
     let client_writes_outputs = !ydoc.server_writes_outputs();
 
     let msg_id = ws
@@ -92,59 +124,158 @@ pub(super) async fn execute_code_ydoc(
     let mut fetched_urls: HashSet<String> = HashSet::new();
     let mut seen_indices: HashSet<usize> = HashSet::new();
     let mut idle_received = false;
+    let mut shell_reply_received = false;
     let mut expected_ec: Option<i64> = None;
     let deadline = tokio::time::Instant::now() + executor.config.timeout;
+    let mut post_completion_output_deadline: Option<tokio::time::Instant> = None;
+    let mut post_idle_ydoc_deadline: Option<tokio::time::Instant> = None;
+    let mut observed_output_count = 0usize;
+    let debug_exec = std::env::var_os("NB_DEBUG_EXEC").is_some();
+    let debug_started = tokio::time::Instant::now();
+    let mut next_debug_tick = debug_started + std::time::Duration::from_secs(5);
+    let mut last_debug_ec: Option<i64> = None;
+    let mut last_debug_externalized_count = 0usize;
+    let mut last_debug_inline_count = 0usize;
+
+    if debug_exec {
+        eprintln!(
+            "[nb-debug] start ydoc execute cell_idx={cell_idx} cell_id={:?} msg_id={} client_writes_outputs={} initial_ec={:?} timeout={:?}",
+            cell_id,
+            msg_id,
+            client_writes_outputs,
+            initial_execution_count,
+            executor.config.timeout
+        );
+    }
 
     loop {
         let cell_data = ydoc.read_cell_outputs(cell_idx).ok();
         let ec = cell_data.as_ref().and_then(|d| d.execution_count);
+        let externalized_count = cell_data
+            .as_ref()
+            .map(|d| d.externalized_urls.len())
+            .unwrap_or(0);
+        let inline_count = cell_data
+            .as_ref()
+            .map(|d| d.inline_outputs.len())
+            .unwrap_or(0);
         let ec_ready = expected_ec.is_some() && ec == expected_ec;
+        let ydoc_execution_advanced = !client_writes_outputs
+            && ec
+                .zip(initial_execution_count)
+                .map(|(current, initial)| current > initial)
+                .unwrap_or_else(|| ec.is_some() && initial_execution_count.is_none());
+        let execution_complete = idle_received || ydoc_execution_advanced || shell_reply_received;
 
-        if ec_ready {
+        if debug_exec && tokio::time::Instant::now() >= next_debug_tick {
+            eprintln!(
+                "[nb-debug] tick elapsed={:?} cell_idx={cell_idx} ec={:?} expected_ec={:?} ec_ready={} ydoc_advanced={} idle={} shell_reply={} externalized={} inline={} outputs={} kernel_outputs={}",
+                debug_started.elapsed(),
+                ec,
+                expected_ec,
+                ec_ready,
+                ydoc_execution_advanced,
+                idle_received,
+                shell_reply_received,
+                externalized_count,
+                inline_count,
+                outputs.len(),
+                kernel_outputs.len()
+            );
+            next_debug_tick += std::time::Duration::from_secs(5);
+        }
+
+        if debug_exec
+            && (ec != last_debug_ec
+                || externalized_count != last_debug_externalized_count
+                || inline_count != last_debug_inline_count)
+        {
+            eprintln!(
+                "[nb-debug] ydoc state elapsed={:?} cell_idx={cell_idx} ec={:?} externalized={} inline={} ydoc_advanced={}",
+                debug_started.elapsed(),
+                ec,
+                externalized_count,
+                inline_count,
+                ydoc_execution_advanced
+            );
+            last_debug_ec = ec;
+            last_debug_externalized_count = externalized_count;
+            last_debug_inline_count = inline_count;
+        }
+
+        if ec_ready || ydoc_execution_advanced || (!client_writes_outputs && shell_reply_received) {
             if let Some(ref cell_data) = cell_data {
                 for (idx, url_path) in &cell_data.externalized_urls {
                     if fetched_urls.insert(url_path.clone()) {
                         seen_indices.insert(*idx);
+                        if debug_exec {
+                            eprintln!(
+                                "[nb-debug] output-url elapsed={:?} cell_idx={cell_idx} idx={} url={}",
+                                debug_started.elapsed(),
+                                idx,
+                                url_path
+                            );
+                        }
                         if let Some(output) =
                             fetch_output(&http, &executor.server_url, &executor.token, url_path)
                                 .await
                         {
-                            if let Some(cb) = &on_output {
-                                cb(&output);
+                            if client_writes_outputs || kernel_outputs.is_empty() {
+                                if let Some(cb) = &on_output {
+                                    cb(&output);
+                                }
                             }
-                            outputs.push(output);
+                            if client_writes_outputs || kernel_outputs.is_empty() {
+                                outputs.push(output);
+                            }
                         }
                     }
                 }
                 for (idx, output) in &cell_data.inline_outputs {
                     if seen_indices.insert(*idx) {
-                        if let Some(cb) = &on_output {
-                            cb(output);
+                        if client_writes_outputs || kernel_outputs.is_empty() {
+                            if let Some(cb) = &on_output {
+                                cb(&output);
+                            }
                         }
-                        outputs.push(output.clone());
+                        if client_writes_outputs || kernel_outputs.is_empty() {
+                            outputs.push(output.clone());
+                        }
                     }
                 }
             }
 
-            if idle_received {
-                let has_error = outputs
-                    .iter()
-                    .any(|o| matches!(o, nbformat::v4::Output::Error(_)));
-                let error_info = outputs.iter().find_map(|o| {
-                    if let nbformat::v4::Output::Error(err) = o {
-                        Some(ExecutionError {
-                            ename: err.ename.clone(),
-                            evalue: err.evalue.clone(),
-                            traceback: err.traceback.clone(),
-                        })
+            if execution_complete {
+                let have_outputs = !outputs.is_empty() || !kernel_outputs.is_empty();
+                let output_count = outputs.len() + kernel_outputs.len();
+                if output_count > observed_output_count {
+                    observed_output_count = output_count;
+                    post_completion_output_deadline = None;
+                }
+
+                if !client_writes_outputs && !idle_received {
+                    let quiet_period = if have_outputs {
+                        std::time::Duration::from_millis(2500)
+                    } else if shell_reply_received {
+                        std::time::Duration::from_secs(1)
                     } else {
-                        None
+                        std::time::Duration::from_secs(3)
+                    };
+                    let output_deadline = *post_completion_output_deadline
+                        .get_or_insert_with(|| tokio::time::Instant::now() + quiet_period);
+                    if tokio::time::Instant::now() < output_deadline {
+                        match tokio::time::timeout_at(output_deadline, ydoc.recv_update()).await {
+                            Ok(Ok(_)) => continue,
+                            Ok(Err(e)) => return Err(e).context("Y.js update error"),
+                            Err(_) => {}
+                        }
                     }
-                });
-                return if has_error {
-                    Ok(ExecutionResult::error(outputs, ec, error_info.unwrap()))
+                }
+
+                return if client_writes_outputs || kernel_outputs.is_empty() {
+                    Ok(result_from_outputs(outputs, ec))
                 } else {
-                    Ok(ExecutionResult::success(outputs, ec))
+                    Ok(result_from_outputs(kernel_outputs, expected_ec.or(ec)))
                 };
             }
         }
@@ -163,6 +294,30 @@ pub(super) async fn execute_code_ydoc(
         }
 
         if idle_received {
+            if !client_writes_outputs {
+                let ydoc_deadline = *post_idle_ydoc_deadline.get_or_insert_with(|| {
+                    tokio::time::Instant::now() + std::time::Duration::from_secs(1)
+                });
+                if tokio::time::Instant::now() >= ydoc_deadline {
+                    if debug_exec {
+                        eprintln!(
+                            "[nb-debug] post-idle ydoc wait expired elapsed={:?} cell_idx={cell_idx} ec={:?} outputs={} externalized={} inline={}",
+                            debug_started.elapsed(),
+                            ec,
+                            outputs.len(),
+                            externalized_count,
+                            inline_count
+                        );
+                    }
+                    break;
+                }
+                match tokio::time::timeout_at(ydoc_deadline, ydoc.recv_update()).await {
+                    Ok(Ok(_)) => continue,
+                    Ok(Err(e)) => return Err(e).context("Y.js update error"),
+                    Err(_) => break,
+                }
+            }
+
             match tokio::time::timeout_at(deadline, ydoc.recv_update()).await {
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => return Err(e).context("Y.js update error"),
@@ -188,20 +343,55 @@ pub(super) async fn execute_code_ydoc(
                                 match &msg.content {
                                     JupyterMessageContent::ExecuteInput(input) => {
                                         expected_ec = Some(input.execution_count.0 as i64);
+                                        if debug_exec {
+                                            eprintln!(
+                                                "[nb-debug] execute_input elapsed={:?} cell_idx={cell_idx} ec={:?}",
+                                                debug_started.elapsed(),
+                                                expected_ec
+                                            );
+                                        }
+                                    }
+                                    JupyterMessageContent::ExecuteReply(reply) => {
+                                        if expected_ec.is_none() {
+                                            expected_ec =
+                                                Some(reply.execution_count.value() as i64);
+                                        }
+                                        shell_reply_received = true;
+                                        if debug_exec {
+                                            eprintln!(
+                                                "[nb-debug] execute_reply elapsed={:?} cell_idx={cell_idx} ec={:?}",
+                                                debug_started.elapsed(),
+                                                expected_ec
+                                            );
+                                        }
                                     }
                                     JupyterMessageContent::Status(status) => {
+                                        if debug_exec {
+                                            eprintln!(
+                                                "[nb-debug] status elapsed={:?} cell_idx={cell_idx} state={:?}",
+                                                debug_started.elapsed(),
+                                                status.execution_state
+                                            );
+                                        }
                                         if matches!(status.execution_state,
                                             jupyter_protocol::ExecutionState::Idle) {
                                             idle_received = true;
+                                            if debug_exec {
+                                                eprintln!(
+                                                    "[nb-debug] idle elapsed={:?} cell_idx={cell_idx}",
+                                                    debug_started.elapsed()
+                                                );
+                                            }
                                         }
                                     }
                                     _ => {
-                                        if client_writes_outputs {
-                                            if let Some(output) =
-                                                kernel_msg_to_output(&msg.content)
-                                            {
-                                                kernel_outputs.push(output);
+                                        if let Some(output) = kernel_msg_to_output(&msg.content) {
+                                            if !client_writes_outputs {
+                                                if let Some(cb) = &on_output {
+                                                    cb(&output);
+                                                }
                                             }
+                                            kernel_outputs.push(output);
                                         }
                                     }
                                 }
@@ -227,34 +417,16 @@ pub(super) async fn execute_code_ydoc(
     // return what the kernel WS collected rather than losing output.
     if client_writes_outputs && !kernel_outputs.is_empty() {
         let ec = expected_ec;
-        let has_error = kernel_outputs
-            .iter()
-            .any(|o| matches!(o, nbformat::v4::Output::Error(_)));
-        let error_info = kernel_outputs.iter().find_map(|o| {
-            if let nbformat::v4::Output::Error(err) = o {
-                Some(ExecutionError {
-                    ename: err.ename.clone(),
-                    evalue: err.evalue.clone(),
-                    traceback: err.traceback.clone(),
-                })
-            } else {
-                None
-            }
-        });
-        return if has_error {
-            Ok(ExecutionResult::error(
-                kernel_outputs,
-                ec,
-                error_info.unwrap(),
-            ))
-        } else {
-            Ok(ExecutionResult::success(kernel_outputs, ec))
-        };
+        return Ok(result_from_outputs(kernel_outputs, ec));
     }
 
     let ec = ydoc
         .read_cell_outputs(cell_idx)
         .ok()
         .and_then(|c| c.execution_count);
-    Ok(ExecutionResult::success(outputs, ec))
+    if !kernel_outputs.is_empty() {
+        Ok(result_from_outputs(kernel_outputs, expected_ec.or(ec)))
+    } else {
+        Ok(result_from_outputs(outputs, ec))
+    }
 }

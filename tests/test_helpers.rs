@@ -189,7 +189,7 @@ pub fn copy_fixture_dir(fixture_subdir: &str, dest_path: &std::path::Path) {
 static VENV_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 /// Return the path to the pre-built test venv (created by setup_test_env.sh).
-/// Returns None and prints a hint if the venv doesn't exist.
+/// Creates the selected venv on demand via setup_test_env.sh if it doesn't exist.
 #[allow(dead_code)]
 pub fn setup_execution_venv() -> Option<PathBuf> {
     VENV_PATH.get_or_init(find_venv).clone()
@@ -198,6 +198,10 @@ pub fn setup_execution_venv() -> Option<PathBuf> {
 fn find_venv() -> Option<PathBuf> {
     let test_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
     let venv_path = test_dir.join(venv_dir_name());
+    let setup_backend = match test_backend().as_str() {
+        "" => "local".to_string(),
+        backend => backend.to_string(),
+    };
 
     let python_bin = if cfg!(windows) {
         venv_path.join("Scripts").join("python.exe")
@@ -205,13 +209,37 @@ fn find_venv() -> Option<PathBuf> {
         venv_path.join("bin").join("python")
     };
 
+    if !python_bin.exists() {
+        let setup_script = test_dir.join("setup_test_env.sh");
+        eprintln!(
+            "Test venv not found at {}; creating it with {} {}",
+            venv_path.display(),
+            setup_script.display(),
+            setup_backend
+        );
+
+        let setup_ok = Command::new(&setup_script)
+            .arg(&setup_backend)
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+
+        if !setup_ok {
+            eprintln!(
+                "Could not create test venv at {}. Run {} {} for details.",
+                venv_path.display(),
+                setup_script.display(),
+                setup_backend
+            );
+            return None;
+        }
+    }
+
     if python_bin.exists() {
         Some(venv_path)
     } else {
-        eprintln!(
-            "⚠️  Test venv not found at {}. Run ./tests/setup_test_env.sh first.",
-            venv_path.display()
-        );
+        eprintln!("Test venv still missing at {}", venv_path.display());
         None
     }
 }

@@ -1,20 +1,17 @@
 //! Connect-mode integration tests.
 //!
 //! These tests spin up a real Jupyter Server and must be run **single-threaded**
-//! to avoid races on the shared server. Always invoke with:
-//!
-//!   cargo test --test integration_connect_mode -- --test-threads=1
+//! to avoid races on the shared server. Select a backend with `NB_TEST_BACKEND`.
+//! If `NB_TEST_BACKEND` is unset, these tests skip themselves so ordinary
+//! `cargo test` does not install connect-mode server extensions into the local
+//! execution venv.
 //!
 //! Each backend requires its own pinned venv (see tests/setup_test_env.sh).
-//! Select a backend with `NB_TEST_BACKEND`:
 //!
-//!   ./tests/setup_test_env.sh jsd
 //!   NB_TEST_BACKEND=jsd cargo test --test integration_connect_mode -- --test-threads=1
 //!
-//!   ./tests/setup_test_env.sh jupyter-collaboration
 //!   NB_TEST_BACKEND=jupyter-collaboration cargo test --test integration_connect_mode -- --test-threads=1
 //!
-//!   ./tests/setup_test_env.sh none
 //!   NB_TEST_BACKEND=none cargo test --test integration_connect_mode -- --test-threads=1
 //!
 //! jupyter-collaboration and jupyter-server-documents must never be installed in
@@ -106,6 +103,12 @@ fn start_shared_server() -> Option<SharedServerInfo> {
     // jupyter-collaboration and jupyter-server-documents must never be installed into
     // the same venv.
     let backend = test_helpers::test_backend();
+    if backend.is_empty() {
+        eprintln!(
+            "Skipping connect-mode tests: set NB_TEST_BACKEND=jsd, NB_TEST_BACKEND=jupyter-collaboration, or NB_TEST_BACKEND=none"
+        );
+        return None;
+    }
 
     // If NB_TEST_SERVER_URL/TOKEN are set, use the externally-managed server.
     if let (Ok(server_url), Ok(token)) = (
@@ -272,7 +275,17 @@ struct TestCtx {
 
 impl TestCtx {
     fn new() -> Option<Self> {
-        shared_server().map(|info| TestCtx { info })
+        if test_helpers::test_backend().is_empty() {
+            return None;
+        }
+
+        match shared_server() {
+            Some(info) => Some(TestCtx { info }),
+            None => panic!(
+                "connect-mode backend '{}' was requested, but the shared Jupyter server was not available",
+                test_helpers::test_backend()
+            ),
+        }
     }
 
     /// Copy a fixture notebook into the server root under `dest_name` and return the path.
@@ -374,6 +387,17 @@ impl TestCtx {
             .env_remove("PYTHONHOME")
             .output()
             .expect("Failed to execute nb command");
+
+        if std::env::var_os("NB_DEBUG_EXEC").is_some() && args.contains(&"execute") {
+            eprintln!(
+                "----- nb debug command args={:?} cwd={} status={} -----\nSTDERR:\n{}\nSTDOUT:\n{}",
+                args,
+                cwd.display(),
+                output.status,
+                String::from_utf8_lossy(&output.stderr),
+                String::from_utf8_lossy(&output.stdout)
+            );
+        }
 
         CommandResult {
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
