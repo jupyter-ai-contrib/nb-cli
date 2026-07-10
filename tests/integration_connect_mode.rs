@@ -25,15 +25,11 @@
 mod test_helpers;
 
 use std::fs;
-use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::OnceLock;
+use std::sync::{Mutex, Once, OnceLock};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
-
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
 
 // reqwest is used for the externally-managed server health-check poll.
 use reqwest;
@@ -54,9 +50,53 @@ struct SharedServerInfo {
 /// One shared Jupyter Server for the whole test suite.
 /// Initialized on first access; lives until the test process exits.
 static SHARED_SERVER: OnceLock<Option<SharedServerInfo>> = OnceLock::new();
+static SERVER_STOP_INFO: OnceLock<Mutex<Option<ServerStopInfo>>> = OnceLock::new();
+static REGISTER_SERVER_STOP: Once = Once::new();
 
 fn shared_server() -> Option<&'static SharedServerInfo> {
     SHARED_SERVER.get_or_init(start_shared_server).as_ref()
+}
+
+struct ServerStopInfo {
+    jupyter_bin: PathBuf,
+    port: u16,
+    venv_path_env: String,
+    venv_root: PathBuf,
+}
+
+fn server_stop_info() -> &'static Mutex<Option<ServerStopInfo>> {
+    SERVER_STOP_INFO.get_or_init(|| Mutex::new(None))
+}
+
+fn register_server_stop_at_exit(info: ServerStopInfo) {
+    if let Ok(mut stop_info) = server_stop_info().lock() {
+        *stop_info = Some(info);
+    }
+
+    REGISTER_SERVER_STOP.call_once(|| unsafe {
+        extern "C" {
+            fn atexit(cb: extern "C" fn()) -> std::os::raw::c_int;
+        }
+
+        let _ = atexit(stop_shared_server_at_exit);
+    });
+}
+
+extern "C" fn stop_shared_server_at_exit() {
+    let Some(info) = server_stop_info()
+        .lock()
+        .ok()
+        .and_then(|mut info| info.take())
+    else {
+        return;
+    };
+
+    let _ = Command::new(&info.jupyter_bin)
+        .args(["server", "stop", &info.port.to_string(), "-y"])
+        .env("PATH", &info.venv_path_env)
+        .env("VIRTUAL_ENV", &info.venv_root)
+        .env_remove("PYTHONHOME")
+        .status();
 }
 
 fn start_shared_server() -> Option<SharedServerInfo> {
@@ -165,68 +205,53 @@ fn start_shared_server() -> Option<SharedServerInfo> {
     .env("PATH", &venv_path_env)
     .env("VIRTUAL_ENV", &venv_root)
     .env_remove("PYTHONHOME")
-    // Force Python to flush stderr immediately even when writing to a pipe.
-    // Without this Python switches to full buffering and the startup log lines
-    // never arrive until the buffer fills, causing the URL reader to block.
-    .env("PYTHONUNBUFFERED", "1")
     // jupyter-collaboration's Y-store (.jupyter_ystore.db) is written relative to
     // the process cwd, not --ServerApp.root_dir; without this the shared test
     // server pollutes the crate root with that file on every run.
     .current_dir(&server_root)
     .stdout(std::process::Stdio::null())
-    // Piped so we can read the bound URL from Jupyter's startup log.
-    .stderr(std::process::Stdio::piped());
-
-    // Put the server in its own process group so cleanup can kill the whole
-    // group (server + any kernels it spawned), not just the top-level process.
-    // Without this, an interrupted test run leaks orphaned kernel processes.
-    #[cfg(unix)]
-    {
-        cmd.process_group(0);
-    }
+    .stderr(std::process::Stdio::null());
 
     let mut child = cmd.spawn().ok()?;
 
-    // Read stderr lines until Jupyter prints the bound 127.0.0.1 URL, which
-    // is the authoritative signal that the server is ready and listening.
-    // Jupyter always logs:
-    //   [I ... ServerApp] Jupyter Server X.Y is running at:
-    //   [I ... ServerApp]     http://127.0.0.1:PORT/?token=...
-    // We match the 127.0.0.1 line to extract the actual bound port.
-    let stderr = child.stderr.take()?;
-    let server_url = {
-        let reader = BufReader::new(stderr);
-        let deadline = Instant::now() + Duration::from_secs(30);
-        let mut found = None;
-        for line in reader.lines() {
-            if Instant::now() > deadline {
-                break;
-            }
-            let Ok(line) = line else { break };
-            if let Some(start) = line.find("http://127.0.0.1:") {
-                // Extract "http://127.0.0.1:PORT" — skip past "http://" before
-                // searching for the next '/' so we don't stop at the "://" itself.
-                let url_start = &line[start..];
-                let end = url_start[7..]
-                    .find('/')
-                    .map(|i| i + 7)
-                    .unwrap_or(url_start.len());
-                found = Some(url_start[..end].to_string());
-                break;
-            }
-        }
-        match found {
-            Some(url) => url,
-            None => {
-                eprintln!("⚠️  Jupyter Server did not print a bound URL in time — skipping connect-mode tests");
-                let _ = child.kill();
-                return None;
-            }
+    let (server_url, port) = match wait_for_server_list_entry(
+        &jupyter_bin,
+        &server_root,
+        &token,
+        &venv_path_env,
+        &venv_root,
+        Duration::from_secs(30),
+    ) {
+        Some(server) => server,
+        None => {
+            eprintln!("⚠️  Jupyter Server did not appear in `jupyter server list` in time — skipping connect-mode tests");
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
         }
     };
 
-    // Leak the process guard so it lives until process exit (and kills the server).
-    let _guard: &'static mut ServerKillGuard = Box::leak(Box::new(ServerKillGuard { child }));
+    if !wait_for_server(&server_url, &token, Duration::from_secs(15)) {
+        eprintln!(
+            "⚠️  Jupyter Server appeared in `jupyter server list` but did not become healthy"
+        );
+        let _ = Command::new(&jupyter_bin)
+            .args(["server", "stop", &port.to_string(), "-y"])
+            .env("PATH", &venv_path_env)
+            .env("VIRTUAL_ENV", &venv_root)
+            .env_remove("PYTHONHOME")
+            .status();
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    }
+
+    register_server_stop_at_exit(ServerStopInfo {
+        jupyter_bin,
+        port,
+        venv_path_env: venv_path_env.clone(),
+        venv_root: venv_root.clone(),
+    });
 
     let binary_path = env!("CARGO_BIN_EXE_nb").into();
 
@@ -238,33 +263,6 @@ fn start_shared_server() -> Option<SharedServerInfo> {
         venv_path_env,
         venv_root,
     })
-}
-
-/// Kills the child process (and, on Unix, its whole process group) when dropped.
-struct ServerKillGuard {
-    child: std::process::Child,
-}
-
-impl Drop for ServerKillGuard {
-    fn drop(&mut self) {
-        // The server was spawned with process_group(0), so its pid is also its
-        // pgid. Signal the group first to take any kernels it spawned down with
-        // it; fall back to killing just the direct child in case `kill` (or the
-        // group signal) is unavailable, e.g. on non-Unix platforms.
-        #[cfg(unix)]
-        {
-            let pgid = self.child.id().to_string();
-            let _ = Command::new("kill")
-                .args(["-TERM", &format!("-{}", pgid)])
-                .status();
-            std::thread::sleep(Duration::from_millis(300));
-            let _ = Command::new("kill")
-                .args(["-KILL", &format!("-{}", pgid)])
-                .status();
-        }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
 }
 
 /// Per-test helper that wraps the shared server and provides convenience methods.
@@ -434,6 +432,82 @@ impl CommandResult {
         }
         self
     }
+}
+
+/// Block until `jupyter server list --jsonlist` contains the server launched for
+/// `server_root`, then return its base URL and port.
+fn wait_for_server_list_entry(
+    jupyter_bin: &std::path::Path,
+    server_root: &std::path::Path,
+    token: &str,
+    venv_path_env: &str,
+    venv_root: &std::path::Path,
+    timeout: Duration,
+) -> Option<(String, u16)> {
+    let deadline = Instant::now() + timeout;
+    let mut interval_ms = 200u64;
+
+    while Instant::now() < deadline {
+        if let Some(server) =
+            find_server_list_entry(jupyter_bin, server_root, token, venv_path_env, venv_root)
+        {
+            return Some(server);
+        }
+
+        std::thread::sleep(Duration::from_millis(interval_ms));
+        interval_ms = (interval_ms * 2).min(2_000);
+    }
+
+    None
+}
+
+fn find_server_list_entry(
+    jupyter_bin: &std::path::Path,
+    server_root: &std::path::Path,
+    token: &str,
+    venv_path_env: &str,
+    venv_root: &std::path::Path,
+) -> Option<(String, u16)> {
+    let output = Command::new(jupyter_bin)
+        .args(["server", "list", "--jsonlist"])
+        .env("PATH", venv_path_env)
+        .env("VIRTUAL_ENV", venv_root)
+        .env_remove("PYTHONHOME")
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let servers: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    let servers = servers.as_array()?;
+    let expected_root = server_root.to_string_lossy();
+
+    for server in servers {
+        let root_dir = server
+            .get("root_dir")
+            .or_else(|| server.get("notebook_dir"))
+            .and_then(|value| value.as_str());
+        if root_dir != Some(expected_root.as_ref()) {
+            continue;
+        }
+
+        if server.get("token").and_then(|value| value.as_str()) != Some(token) {
+            continue;
+        }
+
+        let port = server
+            .get("port")
+            .and_then(|value| value.as_u64())
+            .and_then(|port| u16::try_from(port).ok())?;
+
+        let url = server.get("url").and_then(|value| value.as_str())?;
+        let server_url = url.trim_end_matches('/').to_string();
+        return Some((server_url, port));
+    }
+
+    None
 }
 
 /// Block until `GET {server_url}/api?token={token}` returns HTTP 200, or `timeout` elapses.
