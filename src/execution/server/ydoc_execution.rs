@@ -235,7 +235,7 @@ pub(super) async fn execute_code_ydoc(
                     if seen_indices.insert(*idx) {
                         if client_writes_outputs || kernel_outputs.is_empty() {
                             if let Some(cb) = &on_output {
-                                cb(&output);
+                                cb(output);
                             }
                         }
                         if client_writes_outputs || kernel_outputs.is_empty() {
