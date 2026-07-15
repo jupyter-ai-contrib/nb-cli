@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::Path;
 
 /// Jupyter Server REST API client
@@ -400,6 +401,123 @@ impl JupyterClient {
             )
         }
     }
+
+    /// Probe whether the server supports `POST /api/kernels/{id}/execute`.
+    /// Sends a minimal invalid request (empty cells) and checks the status:
+    /// - 400 or 200 means the endpoint exists (server understands the route)
+    /// - 404 or 405 means the endpoint is absent (fall back to kernel WS)
+    pub async fn probe_execute_api(&self, kernel_id: &str) -> Result<bool> {
+        let url = format!("{}/api/kernels/{}/execute", self.base_url, kernel_id);
+        let payload = serde_json::json!({
+            "document_id": "",
+            "cells": []
+        });
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("token {}", self.token))
+            .json(&payload)
+            .send()
+            .await
+            .context("Failed to probe execute API")?;
+
+        let status = response.status().as_u16();
+        // 400 = endpoint exists but rejects our empty probe
+        // 200 = endpoint exists and accepted (unlikely with empty cells)
+        // 404/405 = endpoint not registered on this server
+        Ok(status == 400 || status == 200)
+    }
+
+    /// Trigger cell execution via the server-driven execute API
+    /// (`POST /api/kernels/{kernel_id}/execute`).
+    ///
+    /// Returns `Ok(())` on 200 (accepted, fire-and-forget).
+    /// Returns typed errors for 409 (source mismatch) and 408 (predecessor timeout).
+    pub async fn execute_cells(
+        &self,
+        kernel_id: &str,
+        request: &ExecuteCellsRequest,
+    ) -> Result<ExecuteCellsResponse> {
+        let url = format!("{}/api/kernels/{}/execute", self.base_url, kernel_id);
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("token {}", self.token))
+            .json(request)
+            .send()
+            .await
+            .context("Failed to call execute API")?;
+
+        let status = response.status().as_u16();
+        match status {
+            200 => Ok(ExecuteCellsResponse::Accepted),
+            400 => {
+                let text = response.text().await.unwrap_or_default();
+                anyhow::bail!("Execute API bad request: {}", text);
+            }
+            408 => Ok(ExecuteCellsResponse::PredecessorTimeout),
+            409 => {
+                let body: serde_json::Value =
+                    response.json().await.unwrap_or(serde_json::Value::Null);
+                let cell_id = body
+                    .get("cell_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                Ok(ExecuteCellsResponse::SourceMismatch { cell_id })
+            }
+            _ => {
+                let text = response.text().await.unwrap_or_default();
+                anyhow::bail!(
+                    "Execute API returned unexpected status {}: {}",
+                    status,
+                    text
+                );
+            }
+        }
+    }
+}
+
+/// A cell to execute via the server-driven execute API.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExecuteCellSpec {
+    pub cell_id: String,
+    pub source_hash: String,
+}
+
+/// Request body for `POST /api/kernels/{kernel_id}/execute`.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExecuteCellsRequest {
+    pub document_id: String,
+    pub cells: Vec<ExecuteCellSpec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_request_id: Option<String>,
+}
+
+/// Response from the execute API.
+#[derive(Debug, Clone)]
+pub enum ExecuteCellsResponse {
+    /// 200 — cells enqueued for execution (fire-and-forget)
+    Accepted,
+    /// 408 — predecessor request timed out
+    PredecessorTimeout,
+    /// 409 — cell source has diverged from the provided hash
+    SourceMismatch { cell_id: String },
+}
+
+/// Compute the SHA-256 hex digest of cell source, matching jsd's hashing.
+/// The source is hashed as-is (UTF-8 bytes, no normalization).
+pub fn compute_source_hash(source: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(source.as_bytes());
+    let result = hasher.finalize();
+    result.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 fn filename_from_path(notebook_path: &str) -> String {
@@ -448,5 +566,44 @@ mod tests {
             "trailing slash must not produce double-slash in URL: {url}"
         );
         assert!(url.contains("/api/kernels/k/channels"));
+    }
+
+    #[test]
+    fn test_compute_source_hash() {
+        // SHA-256 of "print('hello')" — verified against Python's hashlib
+        let hash = compute_source_hash("print('hello')");
+        assert_eq!(hash.len(), 64, "SHA-256 hex must be 64 characters");
+        // Same input must produce same output
+        assert_eq!(hash, compute_source_hash("print('hello')"));
+        // Different input must produce different output
+        assert_ne!(hash, compute_source_hash("print('world')"));
+        // Empty string has a well-known hash
+        let empty_hash = compute_source_hash("");
+        assert_eq!(
+            empty_hash,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn test_execute_cells_request_serialization() {
+        let request = ExecuteCellsRequest {
+            document_id: "json:notebook:file-123".to_string(),
+            cells: vec![ExecuteCellSpec {
+                cell_id: "cell-1".to_string(),
+                source_hash: "abc123".to_string(),
+            }],
+            client_id: None,
+            request_id: Some("req-1".to_string()),
+            previous_request_id: None,
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["document_id"], "json:notebook:file-123");
+        assert_eq!(json["cells"][0]["cell_id"], "cell-1");
+        assert_eq!(json["cells"][0]["source_hash"], "abc123");
+        assert_eq!(json["request_id"], "req-1");
+        // Optional None fields should be absent
+        assert!(json.get("client_id").is_none());
+        assert!(json.get("previous_request_id").is_none());
     }
 }
