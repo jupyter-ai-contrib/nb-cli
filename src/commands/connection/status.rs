@@ -1,5 +1,6 @@
 use crate::config::Config;
-use crate::execution::remote::client::JupyterClient;
+use crate::execution::env::EnvManager;
+use crate::execution::server::client::JupyterClient;
 use anyhow::{Context, Result};
 use clap::Args;
 
@@ -114,13 +115,14 @@ fn validate_connection(conn: &crate::config::JupyterConnection) -> Result<()> {
 
 fn get_python_prefix(conn: &crate::config::JupyterConnection) -> String {
     match conn.env_manager.as_deref() {
-        Some("uv") => "uv run".to_string(),
-        Some("pixi") => "pixi run".to_string(),
         None => String::new(),
-        Some(other) => {
-            eprintln!("Warning: Unknown environment manager '{}'", other);
-            String::new()
-        }
+        Some(s) => match EnvManager::parse_saved(s) {
+            Some(manager) => manager.run_prefix().to_string(),
+            None => {
+                eprintln!("Warning: Unknown environment manager '{}'", s);
+                String::new()
+            }
+        },
     }
 }
 

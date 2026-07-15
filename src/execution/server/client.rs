@@ -382,40 +382,6 @@ impl JupyterClient {
         Ok(())
     }
 
-    /// Probe whether the Y.js backend (jupyter-server-documents) is available.
-    /// Uses POST /api/fileid/index, which only jupyter-server-documents registers.
-    /// GET /api/fileid/id cannot be used: it returns 404 for unindexed paths
-    /// even when the fileid extension is installed.
-    ///
-    /// This probe checks only fileid/index, so jupyter-collaboration servers
-    /// (which 404 it) are cached Some(false) and served via the Contents API
-    /// path. ydoc.rs `get_file_id` keeps a separate collaboration/session
-    /// fallback that #95 extends for full jupyter-collaboration support.
-    ///
-    /// Probes with the server root path, which always exists, so the index
-    /// call is idempotent and creates no record for a fake path. Verified
-    /// against jupyter-server-documents 0.2.2 with both ArbitraryFileIdManager
-    /// and LocalFileIdManager: both return 200 for the root path.
-    pub async fn probe_ydoc(&self) -> Result<bool> {
-        let url = format!("{}/api/fileid/index", self.base_url);
-        let response = self
-            .client
-            .post(&url)
-            .query(&[("token", self.token.as_str()), ("path", "")])
-            .send()
-            .await
-            .context("Failed to probe FileID API")?;
-
-        let status = response.status();
-        if status.as_u16() == 404 {
-            Ok(false)
-        } else if status.is_success() || status.is_redirection() {
-            Ok(true)
-        } else {
-            anyhow::bail!("FileID probe returned unexpected status {}", status)
-        }
-    }
-
     /// Get the WebSocket URL for a kernel
     pub fn get_ws_url(&self, kernel_id: &str, session_id: Option<&str>) -> String {
         let ws_base = self

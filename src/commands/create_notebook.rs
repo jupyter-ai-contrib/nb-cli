@@ -1,10 +1,10 @@
 use crate::commands::common::{self, OutputFormat};
-use crate::commands::env_manager::EnvConfig;
+use crate::execution::env::EnvConfig;
 use crate::execution::local::discovery::find_kernel;
 use crate::notebook;
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use nbformat::v4::{Cell, CellId, CellMetadata, KernelSpec, Metadata, Notebook};
+use nbformat::v4::{Cell, CellId, KernelSpec, Metadata, Notebook};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
@@ -93,9 +93,10 @@ pub fn execute(args: CreateArgs) -> Result<()> {
     let mode = common::resolve_execution_mode(None, None)?;
     match &mode {
         crate::execution::types::ExecutionMode::Remote { server_url, token } => {
-            let server_root = common::resolve_server_root();
-            let server_path = common::notebook_path_for_server(&path, server_root.as_deref());
-            let client = crate::execution::remote::client::JupyterClient::new(
+            let server_root = crate::notebook::remote::resolve_server_root();
+            let server_path =
+                crate::notebook::remote::notebook_path_for_server(&path, server_root.as_deref());
+            let client = crate::execution::server::client::JupyterClient::new(
                 server_url.clone(),
                 token.clone(),
             )?;
@@ -173,7 +174,7 @@ fn create_notebook(args: &CreateArgs) -> Result<Notebook> {
     };
 
     // Create cells based on flags
-    let empty_metadata = create_empty_metadata();
+    let empty_metadata = common::empty_cell_metadata();
 
     let cells = if args.markdown {
         vec![Cell::Markdown {
@@ -200,34 +201,12 @@ fn create_notebook(args: &CreateArgs) -> Result<Notebook> {
     })
 }
 
-fn create_empty_metadata() -> CellMetadata {
-    CellMetadata {
-        id: None,
-        collapsed: None,
-        scrolled: None,
-        deletable: None,
-        editable: None,
-        format: None,
-        name: None,
-        tags: None,
-        jupyter: None,
-        execution: None,
-        additional: HashMap::new(),
-    }
-}
-
 fn output_result(result: &CreateResult, format: &OutputFormat) -> Result<()> {
-    match format {
-        OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(&result)?);
-        }
-        OutputFormat::Text | OutputFormat::Markdown => {
-            println!("Created notebook: {}", result.file);
-            println!("Kernel: {}", result.kernel);
-            println!("Cells: {}", result.cell_count);
-        }
-    }
-    Ok(())
+    common::print_result(result, format, |result| {
+        println!("Created notebook: {}", result.file);
+        println!("Kernel: {}", result.kernel);
+        println!("Cells: {}", result.cell_count);
+    })
 }
 
 /// Validate notebook name and return warnings for poor practices

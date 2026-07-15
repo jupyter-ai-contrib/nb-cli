@@ -27,7 +27,22 @@ build:
 
 # Run tests
 test:
-    cargo test
+    just test-all
+
+# Run non-connect tests, then connect-mode against every backend.
+test-all:
+    cargo test --bins
+    cargo test --test integration_connect_config
+    cargo test --test integration_env_kernels
+    cargo test --test integration_execution
+    cargo test --test integration_local_mode
+    NB_TEST_BACKEND=jsd cargo test --test integration_connect_mode -- --test-threads=1
+    NB_TEST_BACKEND=jupyter-collaboration cargo test --test integration_connect_mode -- --test-threads=1
+    NB_TEST_BACKEND=none cargo test --test integration_connect_mode -- --test-threads=1
+
+# Run one connect-mode backend. Usage: just test-connect jsd
+test-connect backend="jsd":
+    NB_TEST_BACKEND={{backend}} cargo test --test integration_connect_mode -- --test-threads=1
 
 # Format code
 fmt:

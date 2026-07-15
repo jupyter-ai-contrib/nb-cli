@@ -1,6 +1,6 @@
 use crate::commands::common::{self, OutputFormat};
-use crate::commands::markdown_renderer::{self, IndexedCell};
-use crate::notebook;
+use crate::commands::output::markdown_renderer::{self, IndexedCell};
+use crate::notebook::session::load_notebook;
 use anyhow::{Context, Result};
 use clap::Parser;
 use nbformat::v4::Cell;
@@ -58,24 +58,10 @@ pub fn execute(args: ReadArgs) -> Result<()> {
 
     // Read from server when connected (or given --server/--token), else local
     let mode = common::resolve_execution_mode(args.server.clone(), args.token.clone())?;
-    let notebook = match &mode {
-        crate::execution::types::ExecutionMode::Remote { server_url, token } => {
-            let server_root = common::resolve_server_root();
-            let server_path = common::notebook_path_for_server(&file_path, server_root.as_deref());
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?;
-            runtime.block_on(common::read_notebook_remote(
-                server_url,
-                token,
-                &server_path,
-            ))?
-        }
-        crate::execution::types::ExecutionMode::Local
-        | crate::execution::types::ExecutionMode::RemoteKernel { .. } => {
-            notebook::read_notebook(&file_path)?
-        }
-    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let notebook = runtime.block_on(load_notebook(&file_path, &mode))?;
 
     // Determine format: markdown (default) or JSON
     let format = if args.json {
