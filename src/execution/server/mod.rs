@@ -26,6 +26,8 @@ pub struct RemoteExecutor {
     pub(super) ydoc: Option<YDocClient>,
     /// Track if we created the session (true) or reused existing (false)
     pub(super) created_session: bool,
+    /// Whether the server supports `POST /api/kernels/{id}/execute` (jsd#248+)
+    pub(super) execute_api_available: Option<bool>,
 }
 
 impl RemoteExecutor {
@@ -39,6 +41,7 @@ impl RemoteExecutor {
             ws: None,
             ydoc: None,
             created_session: false,
+            execute_api_available: None,
         })
     }
 
@@ -185,6 +188,48 @@ impl ExecutionBackend for RemoteExecutor {
         on_output: Option<&crate::execution::OutputCallback>,
     ) -> Result<ExecutionResult> {
         if self.ydoc.is_some() {
+            // Check if the server supports the REST execute API (jsd#248+).
+            // Probe once and cache the result for subsequent cells.
+            if self.execute_api_available.is_none() {
+                if let (Some(client), Some(session)) = (self.client.as_ref(), self.session.as_ref())
+                {
+                    // Only probe for JSD (server_writes_outputs == true).
+                    // jupyter-collaboration servers won't have this endpoint.
+                    let should_probe = self
+                        .ydoc
+                        .as_ref()
+                        .is_some_and(|ydoc| ydoc.server_writes_outputs());
+
+                    if should_probe {
+                        match client.probe_execute_api(&session.kernel.id).await {
+                            Ok(available) => {
+                                self.execute_api_available = Some(available);
+                                if available && std::env::var_os("NB_DEBUG_EXEC").is_some() {
+                                    eprintln!("[nb-debug] Execute API detected — using REST path");
+                                }
+                            }
+                            Err(_) => {
+                                // Probe failed (network error, etc.) — fall back to WS path
+                                self.execute_api_available = Some(false);
+                            }
+                        }
+                    } else {
+                        self.execute_api_available = Some(false);
+                    }
+                } else {
+                    self.execute_api_available = Some(false);
+                }
+            }
+
+            // Use REST API path when available (JSD with execute endpoint)
+            if self.execute_api_available == Some(true) {
+                return ydoc_execution::execute_code_rest_api(
+                    self, code, cell_id, cell_index, on_output,
+                )
+                .await;
+            }
+
+            // Legacy YDoc path: reconnect kernel WS for JSD (server_writes_outputs)
             if self
                 .ydoc
                 .as_ref()

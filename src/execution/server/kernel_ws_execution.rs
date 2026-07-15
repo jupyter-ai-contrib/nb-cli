@@ -102,6 +102,7 @@ mod tests {
             ws: Some(ws),
             ydoc: None,
             created_session: false,
+            execute_api_available: None,
         };
 
         let started = tokio::time::Instant::now();
@@ -162,6 +163,7 @@ mod tests {
             ws: Some(ws),
             ydoc: None,
             created_session: false,
+            execute_api_available: None,
         };
 
         let err = match execute_code_kernel_ws(&mut executor, "1 + 1", None, None).await {
