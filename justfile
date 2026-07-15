@@ -44,6 +44,14 @@ test-all:
 test-connect backend="jsd":
     NB_TEST_BACKEND={{backend}} cargo test --test integration_connect_mode -- --test-threads=1
 
+# Run sanity tests for larger notebooks (local execution, no server required).
+test-sanity:
+    cargo test --test integration_sanity_large -- --test-threads=1
+
+# Run connect-mode sanity tests. Usage: just test-sanity-connect jsd
+test-sanity-connect backend="none":
+    NB_TEST_BACKEND={{backend}} cargo test --test integration_sanity_large_connect -- --test-threads=1
+
 # Format code
 fmt:
     cargo fmt
