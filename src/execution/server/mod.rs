@@ -26,6 +26,8 @@ pub struct RemoteExecutor {
     pub(super) ydoc: Option<YDocClient>,
     /// Track if we created the session (true) or reused existing (false)
     pub(super) created_session: bool,
+    /// Whether the server supports `POST /api/kernels/{id}/execute` (jsd#248+)
+    pub(super) execute_api_available: Option<bool>,
 }
 
 impl RemoteExecutor {
@@ -39,6 +41,7 @@ impl RemoteExecutor {
             ws: None,
             ydoc: None,
             created_session: false,
+            execute_api_available: None,
         })
     }
 
@@ -107,6 +110,11 @@ impl ExecutionBackend for RemoteExecutor {
                         }
                         poll_ms = (poll_ms * 2).min(5_000);
                     }
+                    // Allow the collaboration room to detect the restart and
+                    // reconnect its kernel client. The room's restart callback
+                    // is fired by the kernel restarter's poll loop, which runs
+                    // asynchronously after the REST API returns.
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
                 // Return the existing session directly - no new session/kernel creation
                 (existing.clone(), false)
@@ -132,9 +140,21 @@ impl ExecutionBackend for RemoteExecutor {
 
         // Connect to kernel via WebSocket with session_id
         let ws_url = client.get_ws_url(&session.kernel.id, Some(&session.id));
-        let ws = KernelWebSocket::connect(&ws_url)
+        let mut ws = KernelWebSocket::connect(&ws_url)
             .await
             .context("Failed to connect to kernel WebSocket")?;
+
+        // After a kernel restart, verify the shell channel is ready via the
+        // standard Jupyter readiness handshake (kernel_info_request → reply).
+        // The REST API may report "idle" before ZMQ channels have fully
+        // re-bound, causing execute_requests to be lost on slow CI runners.
+        // Skip for non-restart connects — the kernel is already running and
+        // the WS is immediately functional.
+        if self.config.restart_kernel && !created {
+            ws.wait_until_ready(std::time::Duration::from_secs(60))
+                .await
+                .context("Kernel not ready after restart")?;
+        }
 
         self.client = Some(client);
         self.session = Some(session);
@@ -185,6 +205,55 @@ impl ExecutionBackend for RemoteExecutor {
         on_output: Option<&crate::execution::OutputCallback>,
     ) -> Result<ExecutionResult> {
         if self.ydoc.is_some() {
+            // Check if the server supports the REST execute API (jsd#248+).
+            // Probe once and cache the result for subsequent cells.
+            // Skip when restart_kernel was requested: the room's kernel client
+            // becomes stale after an API-initiated restart (jsd doesn't notify
+            // the room), so the execute API would accept but never complete.
+            if self.execute_api_available.is_none() {
+                if self.config.restart_kernel {
+                    // Force legacy path after restart
+                    self.execute_api_available = Some(false);
+                } else if let (Some(client), Some(session)) =
+                    (self.client.as_ref(), self.session.as_ref())
+                {
+                    // Only probe for JSD (server_writes_outputs == true).
+                    // jupyter-collaboration servers won't have this endpoint.
+                    let should_probe = self
+                        .ydoc
+                        .as_ref()
+                        .is_some_and(|ydoc| ydoc.server_writes_outputs());
+
+                    if should_probe {
+                        match client.probe_execute_api(&session.kernel.id).await {
+                            Ok(available) => {
+                                self.execute_api_available = Some(available);
+                                if available && std::env::var_os("NB_DEBUG_EXEC").is_some() {
+                                    eprintln!("[nb-debug] Execute API detected — using REST path");
+                                }
+                            }
+                            Err(_) => {
+                                // Probe failed (network error, etc.) — fall back to WS path
+                                self.execute_api_available = Some(false);
+                            }
+                        }
+                    } else {
+                        self.execute_api_available = Some(false);
+                    }
+                } else {
+                    self.execute_api_available = Some(false);
+                }
+            }
+
+            // Use REST API path when available (JSD with execute endpoint)
+            if self.execute_api_available == Some(true) {
+                return ydoc_execution::execute_code_rest_api(
+                    self, code, cell_id, cell_index, on_output,
+                )
+                .await;
+            }
+
+            // Legacy YDoc path: reconnect kernel WS for JSD (server_writes_outputs)
             if self
                 .ydoc
                 .as_ref()

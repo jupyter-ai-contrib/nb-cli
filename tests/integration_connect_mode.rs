@@ -105,7 +105,7 @@ fn start_shared_server() -> Option<SharedServerInfo> {
     let backend = test_helpers::test_backend();
     if backend.is_empty() {
         eprintln!(
-            "Skipping connect-mode tests: set NB_TEST_BACKEND=jsd, NB_TEST_BACKEND=jupyter-collaboration, or NB_TEST_BACKEND=none"
+            "Skipping connect-mode tests: set NB_TEST_BACKEND=jsd, NB_TEST_BACKEND=jsd-3, NB_TEST_BACKEND=jupyter-collaboration, or NB_TEST_BACKEND=none"
         );
         return None;
     }
@@ -157,6 +157,7 @@ fn start_shared_server() -> Option<SharedServerInfo> {
             &["jupyter_server==2.20.0", "jupyter-collaboration==4.4.1"]
         }
         "none" | "plain" => &["jupyter_server==2.20.0"],
+        "jsd-3" => &["jupyter_server==2.20.0", "jupyter-server-documents==0.3.0"],
         _ => &["jupyter_server==2.20.0", "jupyter-server-documents==0.2.5"],
     };
 

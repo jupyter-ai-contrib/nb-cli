@@ -12,7 +12,7 @@ use yrs::encoding::write::Write;
 use yrs::types::ToJson;
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
-use yrs::{Array, ArrayRef, Doc, Map, ReadTxn, StateVector, Transact, Update};
+use yrs::{Array, ArrayRef, Doc, GetString, Map, ReadTxn, StateVector, Transact, Update};
 
 use super::output_conversion::{update_cell_execution_count, update_cell_outputs};
 
@@ -88,7 +88,6 @@ pub fn is_yjs_unavailable(e: &anyhow::Error) -> bool {
 pub struct YDocClient {
     doc: Doc,
     ws: WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
-    #[allow(dead_code)]
     file_id: String,
     /// Track the document state when we last synced, so we only send changes
     last_state: StateVector,
@@ -412,6 +411,79 @@ impl YDocClient {
     /// [`update_cell_execution_count`](Self::update_cell_execution_count)).
     pub fn server_writes_outputs(&self) -> bool {
         self.server_writes_outputs
+    }
+
+    /// The file ID used to construct the collaboration room name.
+    /// The document_id for the execute API is `json:notebook:{file_id}`.
+    pub fn file_id(&self) -> &str {
+        &self.file_id
+    }
+
+    /// Read the cell ID from the Y.js document at the given index.
+    pub fn read_cell_id(&self, cell_index: usize) -> Result<String> {
+        let cells_array: ArrayRef = self.doc.get_or_insert_array("cells");
+        let txn = self.doc.transact();
+
+        let cell_value = cells_array
+            .get(&txn, cell_index as u32)
+            .context("Cell index out of bounds in Y.js doc")?;
+        let cell_map: yrs::MapRef = cell_value
+            .cast()
+            .map_err(|_| anyhow::anyhow!("Cell is not a Map"))?;
+
+        let id_value = cell_map
+            .get(&txn, "id")
+            .context("Cell has no 'id' field in Y.js doc")?;
+
+        match id_value.to_json(&txn) {
+            yrs::Any::String(s) => Ok(s.to_string()),
+            _ => anyhow::bail!("Cell 'id' field is not a string"),
+        }
+    }
+
+    /// Read the cell source from the Y.js document at the given index.
+    /// Returns the source as a single string (Y.Text content).
+    pub fn read_cell_source(&self, cell_index: usize) -> Result<String> {
+        let cells_array: ArrayRef = self.doc.get_or_insert_array("cells");
+        let txn = self.doc.transact();
+
+        let cell_value = cells_array
+            .get(&txn, cell_index as u32)
+            .context("Cell index out of bounds in Y.js doc")?;
+        let cell_map: yrs::MapRef = cell_value
+            .cast()
+            .map_err(|_| anyhow::anyhow!("Cell is not a Map"))?;
+
+        let source_value = cell_map
+            .get(&txn, "source")
+            .context("Cell has no 'source' field in Y.js doc")?;
+
+        // Source is stored as Y.Text
+        if let Ok(text_ref) = source_value.clone().cast::<yrs::TextRef>() {
+            return Ok(text_ref.get_string(&txn));
+        }
+
+        // Fallback: try as a plain string
+        match source_value.to_json(&txn) {
+            yrs::Any::String(s) => Ok(s.to_string()),
+            _ => anyhow::bail!("Cell 'source' is neither Y.Text nor a string"),
+        }
+    }
+
+    /// Read the execution_state from the Y.js document at the given index.
+    /// Returns None if the field is absent or not a string.
+    pub fn read_cell_execution_state(&self, cell_index: usize) -> Option<String> {
+        let cells_array: ArrayRef = self.doc.get_or_insert_array("cells");
+        let txn = self.doc.transact();
+
+        let cell_value = cells_array.get(&txn, cell_index as u32)?;
+        let cell_map: yrs::MapRef = cell_value.cast().ok()?;
+        let state_value = cell_map.get(&txn, "execution_state")?;
+
+        match state_value.to_json(&txn) {
+            yrs::Any::String(s) => Some(s.to_string()),
+            _ => None,
+        }
     }
 
     /// Update cell outputs in the Y.js document

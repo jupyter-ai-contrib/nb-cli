@@ -123,6 +123,13 @@ jobs:
     - name: Run connect-mode tests (jupyter-server-documents)
       run: NB_TEST_BACKEND=jsd cargo test --test integration_connect_mode -- --test-threads=1
 
+  # TODO: Add jsd-3 CI job to test the execute API path. The handler exists
+  # in jsd's source (execution_handlers.py) and the PyPI 0.3.0 wheel, but
+  # app.py in that wheel doesn't register *executions_handlers — the handler
+  # registration landed after the 0.3.0 build. A new jsd release is needed.
+  # When available: use NB_TEST_BACKEND=jsd-3 with setup_test_env.sh jsd-3.
+  # The probe in execute_code will auto-detect and use the REST path.
+
   test-connect-collab:
     name: test connect (jupyter-collaboration)
     runs-on: ubuntu-latest

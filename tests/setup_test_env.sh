@@ -33,6 +33,10 @@ case "$BACKEND" in
         VENV_DIR=".test-venv-jsd"
         PACKAGES=("$JUPYTER_SERVER_PIN" "$JSD_PIN")
         ;;
+    jsd-3)
+        VENV_DIR=".test-venv-jsd-3"
+        PACKAGES=("$JUPYTER_SERVER_PIN" "jupyter-server-documents==0.3.0")
+        ;;
     jupyter-collaboration|collab)
         VENV_DIR=".test-venv-collab"
         PACKAGES=("$JUPYTER_SERVER_PIN" "$COLLAB_PIN")
@@ -42,7 +46,7 @@ case "$BACKEND" in
         PACKAGES=("$JUPYTER_SERVER_PIN")
         ;;
     *)
-        echo "❌ Unknown backend '$BACKEND' (expected 'local', 'jsd', 'jupyter-collaboration', or 'none')"
+        echo "❌ Unknown backend '$BACKEND' (expected 'local', 'jsd', 'jsd-3', 'jupyter-collaboration', or 'none')"
         exit 1
         ;;
 esac

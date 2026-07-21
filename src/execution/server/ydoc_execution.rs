@@ -4,6 +4,9 @@
 //! (or in addition to) the kernel WebSocket directly.
 
 use super::RemoteExecutor;
+use crate::execution::server::client::{
+    compute_source_hash, ExecuteCellSpec, ExecuteCellsRequest, ExecuteCellsResponse,
+};
 use crate::execution::types::{ExecutionError, ExecutionResult};
 use anyhow::{Context, Result};
 use jupyter_protocol::messaging::JupyterMessageContent;
@@ -428,5 +431,215 @@ pub(super) async fn execute_code_ydoc(
         Ok(result_from_outputs(kernel_outputs, expected_ec.or(ec)))
     } else {
         Ok(result_from_outputs(outputs, ec))
+    }
+}
+
+/// Server-driven execution via `POST /api/kernels/{kernel_id}/execute`.
+///
+/// This path is used when jupyter-server-documents (jsd) supports the execute
+/// API (jsd#248+). Instead of sending `execute_request` over the kernel WS,
+/// we POST a REST request and observe outputs flowing back through the Y.js
+/// room as the server's kernel client writes them inline into the YDoc.
+///
+/// Completion signal: `execution_state` set to `"idle"` atomically with
+/// `execution_count` in the YDoc cell map.
+pub(super) async fn execute_code_rest_api(
+    executor: &mut RemoteExecutor,
+    _code: &str,
+    cell_id: Option<&str>,
+    cell_index: Option<usize>,
+    on_output: Option<&crate::execution::OutputCallback>,
+) -> Result<ExecutionResult> {
+    let cell_idx = cell_index.context("cell_index required for REST API execution")?;
+    let ydoc = executor
+        .ydoc
+        .as_mut()
+        .context("Y.js client not connected")?;
+    let client = executor
+        .client
+        .as_ref()
+        .context("Jupyter client not connected")?;
+    let session = executor
+        .session
+        .as_ref()
+        .context("Jupyter session not available")?;
+    let kernel_id = session.kernel.id.clone();
+
+    // Build document_id from file_id
+    let document_id = format!("json:notebook:{}", ydoc.file_id());
+
+    // Get the cell_id — prefer the argument, fall back to reading from YDoc
+    let resolved_cell_id = match cell_id {
+        Some(id) => id.to_string(),
+        None => ydoc
+            .read_cell_id(cell_idx)
+            .context("Cannot resolve cell_id for execute API")?,
+    };
+
+    // Compute source_hash from the YDoc's current source (what the server sees)
+    let ydoc_source = ydoc.read_cell_source(cell_idx)?;
+    let source_hash = compute_source_hash(&ydoc_source);
+
+    // Record initial state to detect completion
+    let initial_execution_count = ydoc
+        .read_cell_outputs(cell_idx)
+        .ok()
+        .and_then(|d| d.execution_count);
+
+    let debug_exec = std::env::var_os("NB_DEBUG_EXEC").is_some();
+    let debug_started = tokio::time::Instant::now();
+
+    if debug_exec {
+        eprintln!(
+            "[nb-debug] start REST API execute cell_idx={cell_idx} cell_id={} document_id={} \
+             source_hash={} initial_ec={:?} timeout={:?}",
+            resolved_cell_id,
+            document_id,
+            source_hash,
+            initial_execution_count,
+            executor.config.timeout
+        );
+    }
+
+    // Build and send the execute request
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let request = ExecuteCellsRequest {
+        document_id,
+        cells: vec![ExecuteCellSpec {
+            cell_id: resolved_cell_id.clone(),
+            source_hash: source_hash.clone(),
+        }],
+        client_id: None,
+        request_id: Some(request_id.clone()),
+        previous_request_id: None,
+    };
+
+    let response = client.execute_cells(&kernel_id, &request).await?;
+
+    match response {
+        ExecuteCellsResponse::Accepted => {
+            if debug_exec {
+                eprintln!(
+                    "[nb-debug] REST API accepted elapsed={:?}",
+                    debug_started.elapsed()
+                );
+            }
+        }
+        ExecuteCellsResponse::SourceMismatch { cell_id } => {
+            anyhow::bail!(
+                "Execute API rejected cell {}: source_mismatch (cell source has changed \
+                 on the server since it was loaded into the YDoc)",
+                cell_id
+            );
+        }
+        ExecuteCellsResponse::PredecessorTimeout => {
+            anyhow::bail!("Execute API returned 408: predecessor request timed out");
+        }
+    }
+
+    // Now wait for outputs to appear in the YDoc.
+    // jsd#248 writes outputs inline (no externalized URLs) and sets
+    // execution_state = "idle" atomically with execution_count on completion.
+    let deadline = tokio::time::Instant::now() + executor.config.timeout;
+    let mut outputs: Vec<nbformat::v4::Output> = Vec::new();
+    let mut seen_indices: HashSet<usize> = HashSet::new();
+    let mut next_debug_tick = debug_started + std::time::Duration::from_secs(5);
+
+    // Re-borrow ydoc after the client call (borrow checker)
+    let ydoc = executor
+        .ydoc
+        .as_mut()
+        .context("Y.js client not connected")?;
+
+    loop {
+        // Check for completion: execution_state == "idle" and execution_count advanced
+        let execution_state = ydoc.read_cell_execution_state(cell_idx);
+        let cell_data = ydoc.read_cell_outputs(cell_idx).ok();
+        let ec = cell_data.as_ref().and_then(|d| d.execution_count);
+
+        let is_idle = execution_state.as_deref() == Some("idle");
+        // After a kernel restart the execution_count resets (e.g. 3 → 1),
+        // so we use != to detect any change rather than requiring an increase.
+        let ec_advanced = ec
+            .zip(initial_execution_count)
+            .map(|(current, initial)| current != initial)
+            .unwrap_or_else(|| ec.is_some() && initial_execution_count.is_none());
+
+        if debug_exec && tokio::time::Instant::now() >= next_debug_tick {
+            eprintln!(
+                "[nb-debug] REST tick elapsed={:?} cell_idx={cell_idx} ec={:?} \
+                 execution_state={:?} outputs_collected={} is_idle={} ec_advanced={}",
+                debug_started.elapsed(),
+                ec,
+                execution_state,
+                outputs.len(),
+                is_idle,
+                ec_advanced
+            );
+            next_debug_tick += std::time::Duration::from_secs(5);
+        }
+
+        // Collect any new inline outputs from YDoc
+        if let Some(ref cell_data) = cell_data {
+            for (idx, output) in &cell_data.inline_outputs {
+                if seen_indices.insert(*idx) {
+                    if let Some(cb) = &on_output {
+                        cb(output);
+                    }
+                    outputs.push(output.clone());
+                }
+            }
+            // Also handle any externalized outputs (backwards compat with
+            // servers that still use externalized storage)
+            for (idx, url_path) in &cell_data.externalized_urls {
+                if seen_indices.insert(*idx) {
+                    if let Some(output) = fetch_output(
+                        &reqwest::Client::new(),
+                        &executor.server_url,
+                        &executor.token,
+                        url_path,
+                    )
+                    .await
+                    {
+                        if let Some(cb) = &on_output {
+                            cb(&output);
+                        }
+                        outputs.push(output);
+                    }
+                }
+            }
+        }
+
+        // Completion: server wrote idle + execution_count
+        if is_idle && ec_advanced {
+            if debug_exec {
+                eprintln!(
+                    "[nb-debug] REST complete elapsed={:?} cell_idx={cell_idx} ec={:?} outputs={}",
+                    debug_started.elapsed(),
+                    ec,
+                    outputs.len()
+                );
+            }
+            return Ok(result_from_outputs(outputs, ec));
+        }
+
+        // Wait for the next Y.js update or timeout
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!(
+                "Cell execution timed out after {:?} waiting for server to complete execution",
+                executor.config.timeout
+            );
+        }
+
+        match tokio::time::timeout_at(deadline, ydoc.recv_update()).await {
+            Ok(Ok(_)) => continue,
+            Ok(Err(e)) => return Err(e).context("Y.js WebSocket error during execution"),
+            Err(_) => {
+                anyhow::bail!(
+                    "Cell execution timed out after {:?} waiting for server to complete execution",
+                    executor.config.timeout
+                );
+            }
+        }
     }
 }
