@@ -241,6 +241,62 @@ impl KernelWebSocket {
         Ok(data)
     }
 
+    /// Wait until the kernel is ready to accept requests by sending a
+    /// `kernel_info_request` and waiting for the `kernel_info_reply`.
+    ///
+    /// This is the standard Jupyter protocol readiness handshake — it
+    /// guarantees the kernel's shell channel is fully connected and
+    /// processing messages. Without this, an `execute_request` sent
+    /// immediately after a kernel restart can be lost if the ZMQ channels
+    /// haven't fully re-bound yet (observed as CI flakes on slow runners).
+    pub async fn wait_until_ready(&mut self, timeout: std::time::Duration) -> Result<()> {
+        let msg = JupyterMessage::new(
+            JupyterMessageContent::KernelInfoRequest(jupyter_protocol::KernelInfoRequest {}),
+            None,
+        );
+
+        let msg_id = msg.header.msg_id.clone();
+
+        let binary_data = Self::serialize_to_binary(&msg, "shell")
+            .context("Failed to serialize kernel_info_request")?;
+
+        self.write
+            .send(Message::binary(binary_data))
+            .await
+            .context("Failed to send kernel_info_request")?;
+
+        // Wait for kernel_info_reply matching our msg_id
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            match tokio::time::timeout_at(deadline, self.recv_message()).await {
+                Ok(Ok(Some(reply))) => {
+                    let is_ours = reply
+                        .parent_header
+                        .as_ref()
+                        .map(|h| h.msg_id == msg_id)
+                        .unwrap_or(false);
+                    if is_ours && matches!(reply.content, JupyterMessageContent::KernelInfoReply(_))
+                    {
+                        return Ok(());
+                    }
+                    // Not our reply — keep waiting
+                }
+                Ok(Ok(None)) => {
+                    anyhow::bail!("Kernel WebSocket closed before kernel_info_reply received");
+                }
+                Ok(Err(e)) => {
+                    return Err(e).context("Error waiting for kernel_info_reply");
+                }
+                Err(_) => {
+                    anyhow::bail!(
+                        "Timed out waiting for kernel to become ready (no kernel_info_reply after {:?})",
+                        timeout
+                    );
+                }
+            }
+        }
+    }
+
     /// Send an execute request
     pub async fn send_execute_request(
         &mut self,

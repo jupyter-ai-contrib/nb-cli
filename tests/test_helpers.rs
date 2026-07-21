@@ -129,6 +129,7 @@ pub fn test_backend() -> String {
 fn venv_dir_name() -> &'static str {
     match test_backend().as_str() {
         "jsd" | "jupyter-server-documents" => ".test-venv-jsd",
+        "jsd-3" => ".test-venv-jsd-3",
         "jupyter-collaboration" | "collab" => ".test-venv-collab",
         "none" | "plain" => ".test-venv-plain",
         _ => ".test-venv",
