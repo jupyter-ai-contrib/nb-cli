@@ -110,6 +110,11 @@ impl ExecutionBackend for RemoteExecutor {
                         }
                         poll_ms = (poll_ms * 2).min(5_000);
                     }
+                    // Allow the collaboration room to detect the restart and
+                    // reconnect its kernel client. The room's restart callback
+                    // is fired by the kernel restarter's poll loop, which runs
+                    // asynchronously after the REST API returns.
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
                 // Return the existing session directly - no new session/kernel creation
                 (existing.clone(), false)
@@ -135,9 +140,21 @@ impl ExecutionBackend for RemoteExecutor {
 
         // Connect to kernel via WebSocket with session_id
         let ws_url = client.get_ws_url(&session.kernel.id, Some(&session.id));
-        let ws = KernelWebSocket::connect(&ws_url)
+        let mut ws = KernelWebSocket::connect(&ws_url)
             .await
             .context("Failed to connect to kernel WebSocket")?;
+
+        // After a kernel restart, verify the shell channel is ready via the
+        // standard Jupyter readiness handshake (kernel_info_request → reply).
+        // The REST API may report "idle" before ZMQ channels have fully
+        // re-bound, causing execute_requests to be lost on slow CI runners.
+        // Skip for non-restart connects — the kernel is already running and
+        // the WS is immediately functional.
+        if self.config.restart_kernel && !created {
+            ws.wait_until_ready(std::time::Duration::from_secs(60))
+                .await
+                .context("Kernel not ready after restart")?;
+        }
 
         self.client = Some(client);
         self.session = Some(session);
@@ -190,8 +207,15 @@ impl ExecutionBackend for RemoteExecutor {
         if self.ydoc.is_some() {
             // Check if the server supports the REST execute API (jsd#248+).
             // Probe once and cache the result for subsequent cells.
+            // Skip when restart_kernel was requested: the room's kernel client
+            // becomes stale after an API-initiated restart (jsd doesn't notify
+            // the room), so the execute API would accept but never complete.
             if self.execute_api_available.is_none() {
-                if let (Some(client), Some(session)) = (self.client.as_ref(), self.session.as_ref())
+                if self.config.restart_kernel {
+                    // Force legacy path after restart
+                    self.execute_api_available = Some(false);
+                } else if let (Some(client), Some(session)) =
+                    (self.client.as_ref(), self.session.as_ref())
                 {
                     // Only probe for JSD (server_writes_outputs == true).
                     // jupyter-collaboration servers won't have this endpoint.

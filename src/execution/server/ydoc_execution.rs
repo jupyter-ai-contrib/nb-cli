@@ -558,9 +558,11 @@ pub(super) async fn execute_code_rest_api(
         let ec = cell_data.as_ref().and_then(|d| d.execution_count);
 
         let is_idle = execution_state.as_deref() == Some("idle");
+        // After a kernel restart the execution_count resets (e.g. 3 → 1),
+        // so we use != to detect any change rather than requiring an increase.
         let ec_advanced = ec
             .zip(initial_execution_count)
-            .map(|(current, initial)| current > initial)
+            .map(|(current, initial)| current != initial)
             .unwrap_or_else(|| ec.is_some() && initial_execution_count.is_none());
 
         if debug_exec && tokio::time::Instant::now() >= next_debug_tick {

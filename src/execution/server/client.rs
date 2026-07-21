@@ -2,7 +2,6 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::path::Path;
 
 /// Jupyter Server REST API client
@@ -416,7 +415,7 @@ impl JupyterClient {
         let response = self
             .client
             .post(&url)
-            .header("Authorization", format!("token {}", self.token))
+            .query(&[("token", &self.token)])
             .json(&payload)
             .send()
             .await
@@ -444,7 +443,7 @@ impl JupyterClient {
         let response = self
             .client
             .post(&url)
-            .header("Authorization", format!("token {}", self.token))
+            .query(&[("token", &self.token)])
             .json(request)
             .send()
             .await
@@ -511,13 +510,46 @@ pub enum ExecuteCellsResponse {
     SourceMismatch { cell_id: String },
 }
 
-/// Compute the SHA-256 hex digest of cell source, matching jsd's hashing.
-/// The source is hashed as-is (UTF-8 bytes, no normalization).
+/// Compute the MurmurHash2 (seed=0) of cell source as a decimal string,
+/// matching jsd's `_source_hash()` implementation. This is the hash the
+/// server uses to verify cell source hasn't diverged between request time
+/// and execution time.
 pub fn compute_source_hash(source: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(source.as_bytes());
-    let result = hasher.finalize();
-    result.iter().map(|b| format!("{:02x}", b)).collect()
+    let data = source.as_bytes();
+    let m: u32 = 0x5BD1_E995;
+    let len = data.len();
+    let _h: u32 = (len as u32).wrapping_mul(1); // seed=0, so h = 0 ^ len = len
+                                                // Actually: h = (seed ^ len) & 0xFFFFFFFF, seed=0 => h = len as u32
+    let mut h: u32 = len as u32;
+    let mut i = 0;
+    let mut remaining = len;
+
+    while remaining >= 4 {
+        let k = u32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
+        let k = k.wrapping_mul(m);
+        let k = k ^ (k >> 24);
+        let k = k.wrapping_mul(m);
+        h = h.wrapping_mul(m) ^ k;
+        remaining -= 4;
+        i += 4;
+    }
+
+    if remaining == 3 {
+        h ^= (data[i + 2] as u32 & 0xFF) << 16;
+    }
+    if remaining >= 2 {
+        h ^= (data[i + 1] as u32 & 0xFF) << 8;
+    }
+    if remaining >= 1 {
+        h ^= data[i] as u32 & 0xFF;
+        h = h.wrapping_mul(m);
+    }
+
+    h ^= h >> 13;
+    h = h.wrapping_mul(m);
+    h ^= h >> 15;
+
+    h.to_string()
 }
 
 fn filename_from_path(notebook_path: &str) -> String {
@@ -570,18 +602,23 @@ mod tests {
 
     #[test]
     fn test_compute_source_hash() {
-        // SHA-256 of "print('hello')" — verified against Python's hashlib
-        let hash = compute_source_hash("print('hello')");
-        assert_eq!(hash.len(), 64, "SHA-256 hex must be 64 characters");
-        // Same input must produce same output
-        assert_eq!(hash, compute_source_hash("print('hello')"));
-        // Different input must produce different output
-        assert_ne!(hash, compute_source_hash("print('world')"));
-        // Empty string has a well-known hash
-        let empty_hash = compute_source_hash("");
+        // MurmurHash2 (seed=0) as decimal string — verified against jsd's Python _source_hash()
+        assert_eq!(compute_source_hash(""), "0");
+        assert_eq!(compute_source_hash("print('hello')"), "3975440051");
+        assert_eq!(compute_source_hash("x = 1\ny = 2"), "749973748");
         assert_eq!(
-            empty_hash,
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            compute_source_hash("persistent_var = 3 * 333"),
+            "3952812721"
+        );
+        // Same input must produce same output
+        assert_eq!(
+            compute_source_hash("print('hello')"),
+            compute_source_hash("print('hello')")
+        );
+        // Different input must produce different output
+        assert_ne!(
+            compute_source_hash("print('hello')"),
+            compute_source_hash("print('world')")
         );
     }
 
