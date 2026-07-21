@@ -25,13 +25,14 @@ this also picks the matching venv directory automatically. Run with:
 NB_TEST_BACKEND=jupyter-collaboration cargo test --test integration_connect_mode -- --test-threads=1
 ```
 
-The spawned shared Jupyter server runs in its own process group (`current_dir`
-set to its tempdir root, so backend-specific artifacts like jupyter-collaboration's
-`.jupyter_ystore.db` land there instead of the crate root) and is killed as a
-group on teardown, so an interrupted run doesn't leak orphaned kernels. Each
-notebook-executing test also explicitly deletes its Jupyter session/kernel via
-`DELETE /api/sessions/{id}` when its `NotebookSession` guard drops (production
-code intentionally never deletes sessions, so tests must do this themselves).
+The shared Jupyter server is spawned once per test process (`OnceLock`) with its
+`current_dir` set to a tempdir root, so backend-specific artifacts like
+jupyter-collaboration's `.jupyter_ystore.db` land there instead of the crate
+root. On teardown, an `atexit` hook calls `jupyter server stop <port> -y` to
+cleanly shut down the server. Each notebook-executing test also explicitly
+deletes its Jupyter session/kernel via `DELETE /api/sessions/{id}` when its
+`NotebookSession` guard drops (production code intentionally never deletes
+sessions, so tests must do this themselves).
 
 **Known state (2026-07-05):** against `jupyter-collaboration`, the 4
 execute/restart tests (what PR #99 / issue #92 fixed — FileID fallback, `sessionId`
