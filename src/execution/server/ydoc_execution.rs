@@ -434,6 +434,20 @@ pub(super) async fn execute_code_ydoc(
     }
 }
 
+/// Completion edge for the server-driven execute API (jsd#248 / issue #111).
+///
+/// Per the server-driven contract, jsd writes `execution_state = "idle"` into
+/// the cell **twice**: once early *without* a fresh `execution_count`, and once
+/// together *with* it on real completion. Idle alone is therefore not the
+/// completion edge — an idle with no accompanying count write can even mean the
+/// cell was skipped. A cell is complete only when it is idle **and** a fresh
+/// `execution_count` has been written (`ec_advanced`). Honoring only this
+/// combined edge is what prevents premature completion (truncated/empty output)
+/// on this backend.
+fn execute_api_complete(is_idle: bool, ec_advanced: bool) -> bool {
+    is_idle && ec_advanced
+}
+
 /// Server-driven execution via `POST /api/kernels/{kernel_id}/execute`.
 ///
 /// This path is used when jupyter-server-documents (jsd) supports the execute
@@ -611,7 +625,7 @@ pub(super) async fn execute_code_rest_api(
         }
 
         // Completion: server wrote idle + execution_count
-        if is_idle && ec_advanced {
+        if execute_api_complete(is_idle, ec_advanced) {
             if debug_exec {
                 eprintln!(
                     "[nb-debug] REST complete elapsed={:?} cell_idx={cell_idx} ec={:?} outputs={}",
@@ -641,5 +655,36 @@ pub(super) async fn execute_code_rest_api(
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::execute_api_complete;
+
+    // Locks the idle-plus-count completion rule for the server-driven execute
+    // API (jsd#248 / issue #111): a cell is complete only when the server has
+    // written BOTH `execution_state = "idle"` AND a fresh `execution_count`.
+
+    #[test]
+    fn idle_plus_count_is_complete() {
+        assert!(execute_api_complete(true, true));
+    }
+
+    #[test]
+    fn idle_alone_is_not_complete() {
+        // jsd writes an early idle *without* the count; completing here would
+        // truncate outputs or drop the count entirely.
+        assert!(!execute_api_complete(true, false));
+    }
+
+    #[test]
+    fn count_alone_is_not_complete() {
+        assert!(!execute_api_complete(false, true));
+    }
+
+    #[test]
+    fn neither_is_not_complete() {
+        assert!(!execute_api_complete(false, false));
     }
 }

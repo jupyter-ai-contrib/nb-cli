@@ -22,6 +22,10 @@ BACKEND="${1:-local}"
 # Package pins verified against current nb-cli code (see AGENTS.md for how/why).
 JUPYTER_SERVER_PIN="jupyter_server==2.20.0"
 JSD_PIN="jupyter-server-documents==0.2.5"
+# jsd 0.3.1 is the first release that registers the server-driven execute
+# handler (POST /api/kernels/{id}/execute, jsd#248); 0.3.0 shipped the handler
+# source but did not register it. The REST execute path (PR #110) needs 0.3.1+.
+JSD3_PIN="jupyter-server-documents==0.3.1"
 COLLAB_PIN="jupyter-collaboration==4.4.1"
 
 case "$BACKEND" in
@@ -35,7 +39,7 @@ case "$BACKEND" in
         ;;
     jsd-3)
         VENV_DIR=".test-venv-jsd-3"
-        PACKAGES=("$JUPYTER_SERVER_PIN" "jupyter-server-documents==0.3.0")
+        PACKAGES=("$JUPYTER_SERVER_PIN" "$JSD3_PIN")
         ;;
     jupyter-collaboration|collab)
         VENV_DIR=".test-venv-collab"

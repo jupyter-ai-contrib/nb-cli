@@ -157,7 +157,7 @@ fn start_shared_server() -> Option<SharedServerInfo> {
             &["jupyter_server==2.20.0", "jupyter-collaboration==4.4.1"]
         }
         "none" | "plain" => &["jupyter_server==2.20.0"],
-        "jsd-3" => &["jupyter_server==2.20.0", "jupyter-server-documents==0.3.0"],
+        "jsd-3" => &["jupyter_server==2.20.0", "jupyter-server-documents==0.3.1"],
         _ => &["jupyter_server==2.20.0", "jupyter-server-documents==0.2.5"],
     };
 
@@ -765,6 +765,123 @@ fn test_execute_long_running_cell() {
             result.stdout
         );
     }
+}
+
+// ==================== EXECUTE API (jsd#248) TESTS ====================
+
+/// End-to-end lock for the server-driven execute API path (jsd#248, PR #110)
+/// against a real jsd 0.3.x server: `nb execute` must route through
+/// `POST /api/kernels/{id}/execute`, complete on the idle-plus-count edge, and
+/// the server must persist the outputs + execution_count to the notebook file.
+///
+/// Guards issue #111's silent-data-loss finding: on jsd 0.3.x the pre-#110
+/// heuristic path completed on the bare shell reply, printed outputs once, and
+/// persisted nothing (exit 0 with an empty saved notebook).
+///
+/// jsd-3 only: the REST execute endpoint ships in jupyter-server-documents 0.3.1+.
+#[test]
+fn test_execute_api_completes_and_persists() {
+    if test_helpers::test_backend() != "jsd-3" {
+        eprintln!("⚠️  Skipping: execute API path requires NB_TEST_BACKEND=jsd-3");
+        return;
+    }
+    let Some(ctx) = TestCtx::new() else {
+        eprintln!("⚠️  Skipping connect-mode test: jupyter server not available");
+        return;
+    };
+
+    let _notebook =
+        ctx.copy_fixture_with_teardown("for_connect_restart.ipynb", "test_execute_api.ipynb");
+
+    // Execute the whole notebook through the REST execute path.
+    let result = ctx
+        .run(&["execute", "test_execute_api.ipynb"])
+        .assert_success();
+
+    // Output present in the real-time stream ⇒ completion waited for the
+    // idle-plus-count edge, not a premature idle-only signal.
+    assert!(
+        result.stdout.contains("persistent_var = 999"),
+        "Execute API run should stream 'persistent_var = 999'\nStdout: {}",
+        result.stdout
+    );
+
+    // The server persists the file itself on this path (nb skips its own save).
+    // The room flushes to disk on a short debounce, so poll the saved notebook
+    // until the outputs + execution_count land (directly guards the silent-loss
+    // bug: pre-#110, this file stayed empty forever).
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let persisted = loop {
+        let read = ctx
+            .run(&["read", "test_execute_api.ipynb", "--json"])
+            .assert_success();
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&read.stdout) {
+            let all_code_executed = parsed["cells"]
+                .as_array()
+                .map(|cells| {
+                    let code: Vec<_> = cells.iter().filter(|c| c["cell_type"] == "code").collect();
+                    !code.is_empty() && code.iter().all(|c| !c["execution_count"].is_null())
+                })
+                .unwrap_or(false);
+            let output_persisted = read.stdout.contains("persistent_var = 999");
+            if all_code_executed && output_persisted {
+                break true;
+            }
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    };
+
+    assert!(
+        persisted,
+        "Server-driven execute must persist outputs + execution_count to the \
+         notebook file (issue #111 silent-data-loss guard)"
+    );
+}
+
+/// A cell that calls `input()` must fail fast: the kernel raises
+/// `StdinNotImplementedError` and the run halts with a nonzero exit — it must
+/// never hang waiting for stdin that will never arrive (issue #111).
+///
+/// Skipped against plain jsd (0.2.5): the NextGenKernelManager iopub race (#87)
+/// makes single-cell error propagation flaky on that backend, which is slated
+/// for removal once PR #110 lands. Runs on none, jupyter-collaboration, jsd-3.
+#[test]
+fn test_execute_input_fails_fast() {
+    if test_helpers::test_backend() == "jsd" {
+        eprintln!(
+            "⚠️  Skipping: flaky against jsd 0.2.5 (NextGenKernelManager iopub race, see #87)"
+        );
+        return;
+    }
+    let Some(ctx) = TestCtx::new() else {
+        eprintln!("⚠️  Skipping connect-mode test: jupyter server not available");
+        return;
+    };
+
+    let _notebook = ctx.copy_fixture_with_teardown("for_connect_input.ipynb", "test_input.ipynb");
+
+    let start = Instant::now();
+    let result = ctx.run(&["execute", "test_input.ipynb"]).assert_failure();
+    let elapsed = start.elapsed();
+
+    let combined = format!("{}\n{}", result.stdout, result.stderr);
+    assert!(
+        combined.contains("StdinNotImplementedError"),
+        "input() should raise StdinNotImplementedError\nStdout: {}\nStderr: {}",
+        result.stdout,
+        result.stderr
+    );
+
+    // "Fails fast" means it errored rather than hanging on stdin: it must halt
+    // well within the 120s per-cell execute timeout injected by `run`.
+    assert!(
+        elapsed < Duration::from_secs(60),
+        "input() cell should fail fast (no stdin hang), but took {:?}",
+        elapsed
+    );
 }
 
 // ==================== CLEAR OUTPUTS TESTS ====================
