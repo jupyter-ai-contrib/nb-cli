@@ -1,0 +1,168 @@
+name: Publish to PyPI
+
+# Builds platform wheels (+ sdist) for the `pynb-cli` distribution via maturin and
+# publishes them. See PYPI_DISTRIBUTION.md for the rationale and the one-time bootstrap.
+#
+# Triggers:
+#   * workflow_dispatch  -> pick TestPyPI (default) or PyPI. Use this for the first
+#                           manual upload and for dry-runs against TestPyPI.
+#   * release published  -> auto-publishes to PyPI. This fires when the existing
+#                           `release.yml` flips the draft GitHub release to published,
+#                           so PyPI stays in lockstep with crates.io + GitHub Releases.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "Index to publish to"
+        type: choice
+        default: testpypi
+        options:
+          - testpypi
+          - pypi
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        platform:
+          # glibc (manylinux) wheels -- the common case
+          - target: x86_64
+            manylinux: auto
+            suffix: manylinux-x86_64
+          - target: aarch64
+            manylinux: auto
+            suffix: manylinux-aarch64
+          # musl (Alpine / static) wheels -- mirrors the release.yml musl targets
+          - target: x86_64
+            manylinux: musllinux_1_2
+            suffix: musllinux-x86_64
+          - target: aarch64
+            manylinux: musllinux_1_2
+            suffix: musllinux-aarch64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist
+          manylinux: ${{ matrix.platform.manylinux }}
+          sccache: "true"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.platform.suffix }}
+          path: dist
+
+  macos:
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      matrix:
+        platform:
+          - runner: macos-13        # Intel
+            target: x86_64
+          - runner: macos-latest    # Apple Silicon
+            target: aarch64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.platform.target }}
+          args: --release --out dist
+          sccache: "true"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-${{ matrix.platform.target }}
+          path: dist
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x64
+          args: --release --out dist
+          sccache: "true"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-x64
+          path: dist
+
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-sdist
+          path: dist
+
+  publish:
+    name: Publish (${{ github.event_name == 'release' && 'pypi' || inputs.repository }})
+    runs-on: ubuntu-latest
+    needs: [linux, macos, windows, sdist]
+    # A GitHub Environment scopes the OIDC trusted-publisher configured on (Test)PyPI.
+    environment: ${{ github.event_name == 'release' && 'pypi' || inputs.repository }}
+    permissions:
+      id-token: write   # OIDC token for trusted publishing (no API token stored)
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      - name: List artifacts
+        run: ls -lh dist
+      - name: Publish to PyPI
+        if: ${{ github.event_name == 'release' || inputs.repository == 'pypi' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Publish to TestPyPI
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.repository == 'testpypi' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  pipx-check:
+    name: pipx install smoke check
+    runs-on: ubuntu-latest
+    needs: [publish]
+    steps:
+      - name: Install pipx
+        run: |
+          python3 -m pip install --user pipx
+          python3 -m pipx ensurepath
+      - name: Install pynb-cli from the published index and run it
+        env:
+          TARGET: ${{ github.event_name == 'release' && 'pypi' || inputs.repository }}
+        run: |
+          set -euxo pipefail
+          if [ "$TARGET" = "testpypi" ]; then
+            INDEX="https://test.pypi.org/simple/"
+          else
+            INDEX="https://pypi.org/simple/"
+          fi
+          # New releases can take a minute to appear on the index; retry a few times.
+          for attempt in 1 2 3 4 5 6; do
+            if python3 -m pipx install --index-url "$INDEX" pynb-cli; then
+              break
+            fi
+            echo "pynb-cli not available yet (attempt $attempt), waiting 15s..."
+            sleep 15
+          done
+          # The binary must run with NO Rust toolchain present.
+          nb --version
+          nb --help | head -n 3
