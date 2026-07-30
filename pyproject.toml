@@ -1,0 +1,44 @@
+# PyPI packaging for the `nb` binary, published as the `pynb-cli` distribution.
+# `nb-cli` / `notebook-cli` are already taken on PyPI (checked 2026-07-30).
+# See PYPI_DISTRIBUTION.md for the full rationale.
+#
+# maturin auto-detects `bin` bindings here (single binary target, no pyo3), compiles the
+# `nb` binary, and installs it into the environment's scripts dir so `pip install pynb-cli`
+# puts `nb` on PATH -- same mechanism ruff uses. Build/publish:
+#   pip install maturin
+#   maturin build --release          # produces a wheel in target/wheels/
+#   maturin publish                  # or twine upload target/wheels/*
+
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "pynb-cli"
+description = "A command-line tool for reading, writing, and executing Jupyter notebooks"
+readme = "README.md"
+license = { text = "BSD-3-Clause" }
+requires-python = ">=3.10"
+authors = [{ name = "Project Jupyter", email = "jupyter@googlegroups.com" }]
+keywords = ["jupyter", "notebooks", "cli", "ai"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: BSD License",
+    "Programming Language :: Rust",
+    "Topic :: Utilities",
+    "Topic :: Scientific/Engineering",
+]
+# Version is inherited from Cargo.toml by maturin.
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/jupyter-ai-contrib/nb-cli"
+Repository = "https://github.com/jupyter-ai-contrib/nb-cli"
+Issues = "https://github.com/jupyter-ai-contrib/nb-cli/issues"
+
+[tool.maturin]
+# Package the Rust binary as a wheel "script" (no Python module).
+bindings = "bin"
+strip = true
