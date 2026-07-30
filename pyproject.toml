@@ -1,6 +1,5 @@
 # PyPI packaging for the `nb` binary, published as the `pynb-cli` distribution.
 # `nb-cli` / `notebook-cli` are already taken on PyPI (checked 2026-07-30).
-# See PYPI_DISTRIBUTION.md for the full rationale.
 #
 # maturin auto-detects `bin` bindings here (single binary target, no pyo3), compiles the
 # `nb` binary, and installs it into the environment's scripts dir so `pip install pynb-cli`

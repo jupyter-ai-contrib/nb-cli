@@ -1,14 +1,14 @@
 name: Publish to PyPI
 
 # Builds platform wheels (+ sdist) for the `pynb-cli` distribution via maturin and
-# publishes them. See PYPI_DISTRIBUTION.md for the rationale and the one-time bootstrap.
+# publishes them.
 #
-# Triggers:
-#   * workflow_dispatch  -> pick TestPyPI (default) or PyPI. Use this for the first
-#                           manual upload and for dry-runs against TestPyPI.
-#   * release published  -> auto-publishes to PyPI. This fires when the existing
-#                           `release.yml` flips the draft GitHub release to published,
-#                           so PyPI stays in lockstep with crates.io + GitHub Releases.
+# Trigger: workflow_dispatch -> pick TestPyPI (default) or PyPI.
+#   * Use it directly for the first manual upload and for TestPyPI dry-runs.
+#   * `release.yml` invokes it with `-f repository=pypi` after publishing a release,
+#     so PyPI stays in lockstep with crates.io + GitHub Releases. A workflow_dispatch is
+#     used rather than an `on: release` trigger because events emitted by the default
+#     GITHUB_TOKEN do not start new workflow runs -- workflow_dispatch is the exception.
 
 on:
   workflow_dispatch:
@@ -20,8 +20,6 @@ on:
         options:
           - testpypi
           - pypi
-  release:
-    types: [published]
 
 permissions:
   contents: read
@@ -112,11 +110,11 @@ jobs:
           path: dist
 
   publish:
-    name: Publish (${{ github.event_name == 'release' && 'pypi' || inputs.repository }})
+    name: Publish (${{ inputs.repository }})
     runs-on: ubuntu-latest
     needs: [linux, macos, windows, sdist]
     # A GitHub Environment scopes the OIDC trusted-publisher configured on (Test)PyPI.
-    environment: ${{ github.event_name == 'release' && 'pypi' || inputs.repository }}
+    environment: ${{ inputs.repository }}
     permissions:
       id-token: write   # OIDC token for trusted publishing (no API token stored)
     steps:
@@ -128,10 +126,10 @@ jobs:
       - name: List artifacts
         run: ls -lh dist
       - name: Publish to PyPI
-        if: ${{ github.event_name == 'release' || inputs.repository == 'pypi' }}
+        if: ${{ inputs.repository == 'pypi' }}
         uses: pypa/gh-action-pypi-publish@release/v1
       - name: Publish to TestPyPI
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.repository == 'testpypi' }}
+        if: ${{ inputs.repository == 'testpypi' }}
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
@@ -141,15 +139,20 @@ jobs:
     runs-on: ubuntu-latest
     needs: [publish]
     steps:
+      - uses: actions/checkout@v4
       - name: Install pipx
         run: |
           python3 -m pip install --user pipx
           python3 -m pipx ensurepath
-      - name: Install pynb-cli from the published index and run it
+      - name: Install the just-published pynb-cli and verify its version
         env:
-          TARGET: ${{ github.event_name == 'release' && 'pypi' || inputs.repository }}
+          TARGET: ${{ inputs.repository }}
         run: |
           set -euxo pipefail
+          # Pin to the version being published so this fails if the current run's upload
+          # didn't land, instead of passing on some pre-existing release.
+          VERSION=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/^version = "(.*)"/\1/')
+          echo "Expecting pynb-cli==$VERSION"
           if [ "$TARGET" = "testpypi" ]; then
             INDEX="https://test.pypi.org/simple/"
           else
@@ -157,12 +160,13 @@ jobs:
           fi
           # New releases can take a minute to appear on the index; retry a few times.
           for attempt in 1 2 3 4 5 6; do
-            if python3 -m pipx install --index-url "$INDEX" pynb-cli; then
+            if python3 -m pipx install --index-url "$INDEX" "pynb-cli==$VERSION"; then
               break
             fi
-            echo "pynb-cli not available yet (attempt $attempt), waiting 15s..."
+            echo "pynb-cli==$VERSION not available yet (attempt $attempt), waiting 15s..."
             sleep 15
           done
-          # The binary must run with NO Rust toolchain present.
+          # The binary must run with NO Rust toolchain present, and report the pinned version.
           nb --version
+          nb --version | grep -qw "$VERSION"
           nb --help | head -n 3
