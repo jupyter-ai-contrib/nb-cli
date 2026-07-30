@@ -78,6 +78,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write  # Required to dispatch the PyPI publish workflow
     steps:
       - uses: actions/checkout@v4
         with:
@@ -89,6 +90,14 @@ jobs:
         run: |
           gh release edit ${{ needs.find-draft.outputs.tag }} --draft=false
 
+      - name: Trigger PyPI publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # A release published via GITHUB_TOKEN does not start `on: release` workflows,
+        # so dispatch pypi.yml explicitly (workflow_dispatch is the documented exception).
+        run: |
+          gh workflow run pypi.yml -f repository=pypi --ref ${{ needs.find-draft.outputs.tag }}
+
       - name: Summary
         run: |
           echo "## ✅ Release Published" >> $GITHUB_STEP_SUMMARY
@@ -96,6 +105,7 @@ jobs:
           echo "**Tag**: ${{ needs.find-draft.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
           echo "**Release**: https://github.com/${{ github.repository }}/releases/tag/${{ needs.find-draft.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
           echo "**Crates.io**: https://crates.io/crates/nb-cli" >> $GITHUB_STEP_SUMMARY
+          echo "**PyPI**: publish dispatched to \`pypi.yml\` (pynb-cli)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
           echo "1. Verify the release on GitHub" >> $GITHUB_STEP_SUMMARY
