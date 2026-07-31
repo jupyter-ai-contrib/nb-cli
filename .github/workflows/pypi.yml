@@ -65,11 +65,11 @@ jobs:
           manylinux: ${{ matrix.platform.manylinux }}
           sccache: "true"
           # Keep native-tls/openssl: the vendored OpenSSL build (openssl-src) needs
-          # perl's IPC::Cmd, which manylinux2014 (yum) lacks and the musllinux/Alpine
-          # image needs perl+make for. Install them before cargo builds openssl.
+          # several perl modules (IPC::Cmd, Time::Piece, ...) that the manylinux2014
+          # (yum) image lacks; the musllinux/Alpine image only needs perl+make.
           before-script-linux: |
             if command -v yum >/dev/null 2>&1; then
-              yum install -y perl-IPC-Cmd perl-Data-Dumper
+              yum install -y perl-core perl-IPC-Cmd perl-Time-Piece perl-Data-Dumper
             elif command -v apk >/dev/null 2>&1; then
               apk add --no-cache perl make
             fi
