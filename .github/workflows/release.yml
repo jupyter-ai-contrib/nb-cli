@@ -17,7 +17,7 @@ jobs:
       tag: ${{ steps.find_draft.outputs.tag }}
       should_publish: ${{ steps.check_published.outputs.should_publish }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Find draft release
         id: find_draft
@@ -59,7 +59,7 @@ jobs:
       id-token: write  # Required for trusted publishing
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ needs.find-draft.outputs.tag }}
 
@@ -80,7 +80,7 @@ jobs:
       contents: write
       actions: write  # Required to dispatch the PyPI publish workflow
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ needs.find-draft.outputs.tag }}
 

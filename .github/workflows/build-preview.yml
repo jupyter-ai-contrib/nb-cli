@@ -57,7 +57,7 @@ jobs:
       run: echo "Skipping ${{ matrix.asset_name }} (not selected)" && exit 0
       shell: bash
 
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Set up Rust cache
       if: ${{ contains(matrix.enabled_for, inputs.platforms) }}
@@ -107,7 +107,7 @@ jobs:
     permissions:
       contents: write
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Download artifacts
       uses: actions/download-artifact@v4
