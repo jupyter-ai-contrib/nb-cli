@@ -44,7 +44,11 @@ jobs:
             manylinux: auto
             suffix: manylinux-x86_64
           - target: aarch64
-            manylinux: auto
+            # manylinux2014 (glibc 2.17) headers predate AT_HWCAP2, so aws-lc-sys
+            # (pulled in by reqwest's rustls default) fails to compile on aarch64.
+            # 2_28 (AlmaLinux 8, glibc 2.28) has the modern headers. x86_64 stays on
+            # 2014 for the widest reach.
+            manylinux: "2_28"
             suffix: manylinux-aarch64
           # musl (Alpine / static) wheels -- mirrors the release.yml musl targets
           - target: x86_64
