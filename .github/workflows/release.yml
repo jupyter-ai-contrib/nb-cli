@@ -96,7 +96,7 @@ jobs:
         # A release published via GITHUB_TOKEN does not start `on: release` workflows,
         # so dispatch pypi.yml explicitly (workflow_dispatch is the documented exception).
         run: |
-          gh workflow run pypi.yml -f repository=pypi --ref ${{ needs.find-draft.outputs.tag }}
+          gh workflow run pypi.yml -f repository=pypi -f ref=${{ needs.find-draft.outputs.tag }} --ref ${{ needs.find-draft.outputs.tag }}
 
       - name: Summary
         run: |

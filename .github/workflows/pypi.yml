@@ -20,6 +20,14 @@ on:
         options:
           - testpypi
           - pypi
+      dry_run:
+        description: "Build wheels only (skip publishing + install smoke check)"
+        type: boolean
+        default: false
+      ref:
+        description: "Git ref (tag/branch/SHA) to build from. Empty = the ref this run was dispatched on."
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -28,6 +36,7 @@ jobs:
   linux:
     runs-on: ubuntu-22.04
     strategy:
+      fail-fast: false
       matrix:
         platform:
           # glibc (manylinux) wheels -- the common case
@@ -46,6 +55,8 @@ jobs:
             suffix: musllinux-aarch64
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -53,6 +64,15 @@ jobs:
           args: --release --out dist
           manylinux: ${{ matrix.platform.manylinux }}
           sccache: "true"
+          # Keep native-tls/openssl: the vendored OpenSSL build (openssl-src) needs
+          # perl's IPC::Cmd, which manylinux2014 (yum) lacks and the musllinux/Alpine
+          # image needs perl+make for. Install them before cargo builds openssl.
+          before-script-linux: |
+            if command -v yum >/dev/null 2>&1; then
+              yum install -y perl-IPC-Cmd perl-Data-Dumper
+            elif command -v apk >/dev/null 2>&1; then
+              apk add --no-cache perl make
+            fi
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-linux-${{ matrix.platform.suffix }}
@@ -69,6 +89,8 @@ jobs:
             target: aarch64
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -84,6 +106,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
@@ -99,6 +123,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - name: Build sdist
         uses: PyO3/maturin-action@v1
         with:
@@ -113,6 +139,7 @@ jobs:
     name: Publish (${{ inputs.repository }})
     runs-on: ubuntu-latest
     needs: [linux, macos, windows, sdist]
+    if: ${{ !inputs.dry_run }}
     # A GitHub Environment scopes the OIDC trusted-publisher configured on (Test)PyPI.
     environment: ${{ inputs.repository }}
     permissions:
@@ -140,6 +167,8 @@ jobs:
     needs: [publish]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - name: Install pipx
         run: |
           python3 -m pip install --user pipx
