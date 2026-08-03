@@ -83,14 +83,16 @@ jobs:
           path: dist
 
   macos:
-    runs-on: ${{ matrix.platform.runner }}
+    # Build both wheels on the Apple Silicon runner: it natively builds aarch64 and
+    # cross-compiles x86_64. This avoids the macos-13 (Intel) runner, which GitHub is
+    # retiring and which is frequently unavailable / stuck in the queue.
+    runs-on: macos-latest
     strategy:
+      fail-fast: false
       matrix:
-        platform:
-          - runner: macos-13        # Intel
-            target: x86_64
-          - runner: macos-latest    # Apple Silicon
-            target: aarch64
+        target:
+          - x86_64
+          - aarch64
     steps:
       - uses: actions/checkout@v4
         with:
@@ -98,12 +100,12 @@ jobs:
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          target: ${{ matrix.platform.target }}
+          target: ${{ matrix.target }}
           args: --release --out dist
           sccache: "true"
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-macos-${{ matrix.platform.target }}
+          name: wheels-macos-${{ matrix.target }}
           path: dist
 
   windows:
