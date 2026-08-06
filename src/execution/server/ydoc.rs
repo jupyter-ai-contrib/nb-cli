@@ -208,8 +208,29 @@ impl YDocClient {
         // jupyter-server-documents is absent. Fall back to the
         // jupyter-collaboration session endpoint, which indexes the file if
         // needed and returns its fileId.
+        //
+        // Append the route onto the existing path rather than set_path():
+        // a server mounted under a base_url (e.g. /jupyter) must keep that
+        // prefix, and set_path() replaces the whole path.
         let mut session_url = Url::parse(server_url).context("Invalid server URL")?;
-        session_url.set_path(&format!("/api/collaboration/session/{}", notebook_path));
+        {
+            let mut segments = session_url
+                .path_segments_mut()
+                .map_err(|_| anyhow::anyhow!("Server URL cannot be a base"))?;
+            segments.push("api").push("collaboration").push("session");
+            let parts: Vec<&str> = notebook_path.split('/').filter(|p| !p.is_empty()).collect();
+            for part in &parts {
+                segments.push(part);
+            }
+            // jupyter-collaboration registers this route as
+            // /api/collaboration/session/(.*) (Tornado regex): the trailing
+            // slash after "session" is part of the match. The connect-time
+            // probe uses an empty path; without the slash it 404s and the
+            // backend is misdetected as absent.
+            if parts.is_empty() {
+                segments.push("");
+            }
+        }
         let response = http_client
             .put(session_url)
             .header("Authorization", format!("token {}", token))
@@ -252,31 +273,20 @@ impl YDocClient {
         token: &str,
         session_id: Option<&str>,
     ) -> Result<String> {
-        // Parse base URL to extract host and port
-        let base_url = Url::parse(server_url).context("Invalid server URL")?;
-
-        let host = base_url
-            .host_str()
-            .ok_or_else(|| anyhow::anyhow!("No host in server URL"))?;
-
-        let port = base_url.port().unwrap_or(if base_url.scheme() == "https" {
-            443
-        } else {
-            8888
-        });
-
-        // Build WebSocket URL with json:notebook: prefix
-        let ws_scheme = if base_url.scheme() == "https" {
-            "wss"
-        } else {
-            "ws"
-        };
-
-        let mut ws_url = Url::parse(&format!(
-            "{}://{}:{}/api/collaboration/room/json:notebook:{}",
-            ws_scheme, host, port, file_id
-        ))
-        .context("Failed to build WebSocket URL")?;
+        // Keep any base_url path prefix (e.g. /jupyter) by swapping the
+        // scheme in place and appending the room route to the existing path,
+        // rather than rebuilding the URL from host/port (which drops it).
+        let ws_url_str = server_url
+            .replace("https://", "wss://")
+            .replace("http://", "ws://");
+        let mut ws_url = Url::parse(&ws_url_str).context("Invalid server URL")?;
+        {
+            let mut segments = ws_url
+                .path_segments_mut()
+                .map_err(|_| anyhow::anyhow!("Server URL cannot be a base"))?;
+            segments.push("api").push("collaboration").push("room");
+            segments.push(&format!("json:notebook:{}", file_id));
+        }
 
         ws_url.query_pairs_mut().append_pair("token", token);
         if let Some(sid) = session_id {
@@ -825,6 +835,117 @@ mod fileid_classification_tests {
         let url =
             YDocClient::build_room_ws_url("http://localhost:8888", "file-1", "tok", None).unwrap();
         assert!(!url.contains("sessionId"), "url was: {}", url);
+    }
+
+    #[test]
+    fn build_room_ws_url_preserves_base_url_prefix() {
+        // Server served under a base_url (e.g. https://host/jupyter) must keep
+        // the /jupyter prefix on the Y.js room WebSocket URL.
+        let url = YDocClient::build_room_ws_url(
+            "https://my-jupyter.example.com/jupyter",
+            "file-1",
+            "tok",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            url,
+            "wss://my-jupyter.example.com/jupyter/api/collaboration/room/json:notebook:file-1?token=tok"
+        );
+    }
+
+    #[test]
+    fn build_room_ws_url_preserves_base_url_prefix_with_port() {
+        let url = YDocClient::build_room_ws_url(
+            "http://host:8888/foo/bar",
+            "file-1",
+            "tok",
+            Some("sess-1"),
+        )
+        .unwrap();
+        assert_eq!(
+            url,
+            "ws://host:8888/foo/bar/api/collaboration/room/json:notebook:file-1?token=tok&sessionId=sess-1"
+        );
+    }
+
+    /// Stub that 404s fileid/index and answers the collaboration-session
+    /// fallback, recording the raw HTTP request line of that second request
+    /// so tests can assert the exact path (base_url prefix included).
+    async fn collab_session_stub_recording_request_line(
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Option<String>>>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let recorded = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let recorded_clone = recorded.clone();
+        tokio::spawn(async move {
+            let mut request_count = 0u32;
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let mut tmp = [0u8; 2048];
+                let _ = sock.read(&mut tmp).await;
+                request_count += 1;
+                let request_line = String::from_utf8_lossy(&tmp)
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_string();
+                let (status, body) = if request_count == 1 {
+                    (404, "{}".to_string())
+                } else {
+                    if request_count == 2 {
+                        *recorded_clone.lock().unwrap() = Some(request_line);
+                    }
+                    (
+                        200,
+                        r#"{"fileId":"file-456","sessionId":"session-789"}"#.to_string(),
+                    )
+                };
+                let resp = format!(
+                    "HTTP/1.1 {} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status,
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.shutdown().await;
+            }
+        });
+        (format!("http://{}/jupyter", addr), recorded)
+    }
+
+    #[tokio::test]
+    async fn get_file_id_collab_session_preserves_base_url_prefix() {
+        // The jupyter-collaboration fallback request must keep the base_url
+        // prefix (here /jupyter) in its request path.
+        let (url, recorded) = collab_session_stub_recording_request_line().await;
+        let (id, session_id) = YDocClient::get_file_id(&url, "t", "n.ipynb").await.unwrap();
+        assert_eq!(id, "file-456");
+        assert_eq!(session_id, Some("session-789".to_string()));
+
+        let request_line = recorded.lock().unwrap().clone().unwrap();
+        let path = request_line.split_whitespace().nth(1).unwrap();
+        assert_eq!(
+            path, "/jupyter/api/collaboration/session/n.ipynb",
+            "collab-session request must keep the base_url prefix; raw line: {request_line}"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_file_id_collab_session_keeps_trailing_slash_for_empty_path() {
+        // The connect-time probe calls get_file_id with an empty path. The
+        // jupyter-collaboration route is registered as
+        // /api/collaboration/session/(.*) (Tornado regex), which requires the
+        // trailing slash after "session" — without it the probe 404s and
+        // misdetects the backend as absent.
+        let (url, recorded) = collab_session_stub_recording_request_line().await;
+        YDocClient::get_file_id(&url, "t", "").await.unwrap();
+
+        let request_line = recorded.lock().unwrap().clone().unwrap();
+        let path = request_line.split_whitespace().nth(1).unwrap();
+        assert_eq!(
+            path, "/jupyter/api/collaboration/session/",
+            "empty-path session request must keep the trailing slash; raw line: {request_line}"
+        );
     }
 
     #[tokio::test]
