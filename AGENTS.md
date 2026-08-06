@@ -48,3 +48,22 @@ direct measurement (still stale at +0.7s, cleared by +1.7s). This is a
 **different** root cause from #90 (JSD's clear never persists, permanently,
 because externalized output files get unconditionally re-materialized into
 the notebook on every save) — don't conflate the two if either gets fixed.
+
+## Remote mode and server base_url
+
+`nb connect` stores the server URL exactly as given, including any base_url
+path prefix (e.g. `https://host/jupyter`), and every endpoint — REST API,
+Contents API, kernel WS, Y.js room WS, FileID index — lives under that prefix.
+Two URL-building pitfalls in `src/execution/server/ydoc.rs` were fixed for
+this (2026-08):
+
+- Never rebuild a URL from `scheme://host:port`, and never replace the path
+  with `Url::set_path()`: both silently drop the base_url prefix. Append route
+  segments onto the existing path with `path_segments_mut()` instead (same
+  pattern as `contents_url` in `client.rs`).
+- jupyter-collaboration registers its routes as Tornado regexes
+  `/api/collaboration/session/(.*)` and `/api/collaboration/room/(.*)`, so the
+  trailing slash after `session`/`room` is part of the match. The connect-time
+  probe calls `get_file_id` with an empty path; dropping the slash makes it
+  404 and the backend is silently misdetected as absent ("Mode: direct").
+  Verify route changes against the regexes in `jupyter_server_ydoc/app.py`.
