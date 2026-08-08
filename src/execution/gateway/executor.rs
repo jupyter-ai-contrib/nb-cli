@@ -2,6 +2,7 @@
 
 use crate::execution::output_collector::KernelOutputCollector;
 use crate::execution::server::websocket::KernelWebSocket;
+use crate::execution::server_url;
 use crate::execution::types::{ExecutionConfig, ExecutionResult};
 use crate::execution::{ExecutionBackend, OutputCallback};
 use anyhow::{Context, Result};
@@ -48,10 +49,10 @@ impl RemoteKernelExecutor {
     }
 
     async fn discover_kernel_id(&self) -> Result<String> {
-        let url = format!("{}/api/kernels", self.gateway_url.trim_end_matches('/'));
+        let url = server_url::endpoint(&self.gateway_url, &["api", "kernels"])?;
         let response = self
             .http_client
-            .get(&url)
+            .get(url)
             .header("Authorization", self.auth_header())
             .send()
             .await
@@ -91,7 +92,7 @@ impl RemoteKernelExecutor {
     }
 
     async fn start_kernel(&self) -> Result<String> {
-        let url = format!("{}/api/kernels", self.gateway_url.trim_end_matches('/'));
+        let url = server_url::endpoint(&self.gateway_url, &["api", "kernels"])?;
         let mut body = serde_json::Map::new();
         if let Some(name) = self.config.kernel_name.as_ref() {
             body.insert("name".to_string(), serde_json::Value::String(name.clone()));
@@ -99,7 +100,7 @@ impl RemoteKernelExecutor {
 
         let response = self
             .http_client
-            .post(&url)
+            .post(url)
             .header("Authorization", self.auth_header())
             .json(&serde_json::Value::Object(body))
             .send()
@@ -134,16 +135,12 @@ impl RemoteKernelExecutor {
         Ok(kernel.id)
     }
 
-    fn ws_url_for_kernel(&self, kernel_id: &str) -> String {
-        let trimmed = self.gateway_url.trim_end_matches('/');
-        let base = if let Some(rest) = trimmed.strip_prefix("https://") {
-            format!("wss://{}", rest)
-        } else if let Some(rest) = trimmed.strip_prefix("http://") {
-            format!("ws://{}", rest)
-        } else {
-            trimmed.to_string()
-        };
-        format!("{}/api/kernels/{}/channels", base, kernel_id)
+    fn ws_url_for_kernel(&self, kernel_id: &str) -> Result<String> {
+        Ok(server_url::ws_endpoint(
+            &self.gateway_url,
+            &["api", "kernels", kernel_id, "channels"],
+        )?
+        .to_string())
     }
 
     async fn execute_cell(
@@ -206,7 +203,7 @@ impl ExecutionBackend for RemoteKernelExecutor {
                 .context("Failed to discover kernel from gateway")?,
         };
 
-        let ws_url = self.ws_url_for_kernel(&kernel_id);
+        let ws_url = self.ws_url_for_kernel(&kernel_id)?;
         let auth_value = self.auth_header();
         let ws = KernelWebSocket::connect_with_auth(&ws_url, &auth_value)
             .await
@@ -264,28 +261,38 @@ mod tests {
     fn ws_url_swaps_scheme_and_appends_channels_path() {
         let exec = executor("http://host:8888", "t", "token");
         assert_eq!(
-            exec.ws_url_for_kernel("abc"),
+            exec.ws_url_for_kernel("abc").unwrap(),
             "ws://host:8888/api/kernels/abc/channels"
         );
 
         let exec = executor("https://gw.example.com", "t", "token");
         assert_eq!(
-            exec.ws_url_for_kernel("abc"),
+            exec.ws_url_for_kernel("abc").unwrap(),
             "wss://gw.example.com/api/kernels/abc/channels"
         );
 
         // Trailing slash on the gateway URL must not produce a double slash.
         let exec = executor("https://gw.example.com/", "t", "token");
         assert_eq!(
-            exec.ws_url_for_kernel("abc"),
+            exec.ws_url_for_kernel("abc").unwrap(),
             "wss://gw.example.com/api/kernels/abc/channels"
         );
 
         // "http" inside a path segment must not be rewritten — only the scheme is.
         let exec = executor("https://gw.example.com/httpapi", "t", "token");
         assert_eq!(
-            exec.ws_url_for_kernel("abc"),
+            exec.ws_url_for_kernel("abc").unwrap(),
             "wss://gw.example.com/httpapi/api/kernels/abc/channels"
+        );
+    }
+
+    #[test]
+    fn ws_url_preserves_base_url_prefix() {
+        // A gateway mounted under a base_url prefix must keep it.
+        let exec = executor("https://gw.example.com/gateway", "t", "token");
+        assert_eq!(
+            exec.ws_url_for_kernel("abc").unwrap(),
+            "wss://gw.example.com/gateway/api/kernels/abc/channels"
         );
     }
 }

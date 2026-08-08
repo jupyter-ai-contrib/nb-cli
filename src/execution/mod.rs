@@ -9,6 +9,7 @@ pub mod gateway;
 pub mod local;
 pub mod output_collector;
 pub mod server;
+pub mod server_url;
 pub mod types;
 
 use anyhow::Result;

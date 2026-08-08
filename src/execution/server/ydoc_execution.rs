@@ -7,6 +7,7 @@ use super::RemoteExecutor;
 use crate::execution::server::client::{
     compute_source_hash, ExecuteCellSpec, ExecuteCellsRequest, ExecuteCellsResponse,
 };
+use crate::execution::server_url;
 use crate::execution::types::{ExecutionError, ExecutionResult};
 use anyhow::{Context, Result};
 use jupyter_protocol::messaging::JupyterMessageContent;
@@ -20,7 +21,9 @@ async fn fetch_output(
     token: &str,
     url_path: &str,
 ) -> Option<nbformat::v4::Output> {
-    let url = format!("{}{}", server_url, url_path);
+    // Resolve the server-relative output URL (e.g. /api/contents/...) against
+    // the server base, keeping any base_url prefix.
+    let url = server_url::endpoint_with_path(server_url, &[], url_path).ok()?;
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
     let mut backoff_ms = 100u64; // initial delay before first fetch
 
@@ -28,7 +31,12 @@ async fn fetch_output(
     tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
 
     loop {
-        if let Ok(resp) = http.get(&url).query(&[("token", token)]).send().await {
+        if let Ok(resp) = http
+            .get(url.clone())
+            .query(&[("token", token)])
+            .send()
+            .await
+        {
             if resp.status().is_success() {
                 if let Ok(text) = resp.text().await {
                     if let Ok(output) = serde_json::from_str::<nbformat::v4::Output>(&text) {
