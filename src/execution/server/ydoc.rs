@@ -6,7 +6,6 @@ use nbformat::v4::Output;
 use reqwest::Client as HttpClient;
 use serde::Deserialize;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
-use url::Url;
 use yrs::encoding::varint::VarInt;
 use yrs::encoding::write::Write;
 use yrs::types::ToJson;
@@ -15,6 +14,7 @@ use yrs::updates::encoder::Encode;
 use yrs::{Array, ArrayRef, Doc, GetString, Map, ReadTxn, StateVector, Transact, Update};
 
 use super::output_conversion::{update_cell_execution_count, update_cell_outputs};
+use crate::execution::server_url;
 
 /// Outputs and execution_count read from a Y.js cell
 pub struct YDocCellOutputs {
@@ -168,9 +168,9 @@ impl YDocClient {
     ) -> Result<(String, Option<String>)> {
         let http_client = HttpClient::new();
 
-        let index_url = format!("{}/api/fileid/index", server_url);
+        let index_url = server_url::endpoint(server_url, &["api", "fileid", "index"])?;
         let response = http_client
-            .post(&index_url)
+            .post(index_url)
             .query(&[("path", notebook_path)])
             .header("Authorization", format!("token {}", token))
             .send()
@@ -208,29 +208,17 @@ impl YDocClient {
         // jupyter-server-documents is absent. Fall back to the
         // jupyter-collaboration session endpoint, which indexes the file if
         // needed and returns its fileId.
-        //
-        // Append the route onto the existing path rather than set_path():
-        // a server mounted under a base_url (e.g. /jupyter) must keep that
-        // prefix, and set_path() replaces the whole path.
-        let mut session_url = Url::parse(server_url).context("Invalid server URL")?;
-        {
-            let mut segments = session_url
-                .path_segments_mut()
-                .map_err(|_| anyhow::anyhow!("Server URL cannot be a base"))?;
-            segments.push("api").push("collaboration").push("session");
-            let parts: Vec<&str> = notebook_path.split('/').filter(|p| !p.is_empty()).collect();
-            for part in &parts {
-                segments.push(part);
-            }
-            // jupyter-collaboration registers this route as
-            // /api/collaboration/session/(.*) (Tornado regex): the trailing
-            // slash after "session" is part of the match. The connect-time
-            // probe uses an empty path; without the slash it 404s and the
-            // backend is misdetected as absent.
-            if parts.is_empty() {
-                segments.push("");
-            }
-        }
+        // jupyter-collaboration registers this route as
+        // /api/collaboration/session/(.*) (Tornado regex): the trailing
+        // slash after "session" is part of the match. `endpoint_with_path`
+        // appends the notebook path and yields the trailing slash for the
+        // empty-path connect probe; without it the probe 404s and the
+        // backend is misdetected as absent.
+        let session_url = server_url::endpoint_with_path(
+            server_url,
+            &["api", "collaboration", "session"],
+            notebook_path,
+        )?;
         let response = http_client
             .put(session_url)
             .header("Authorization", format!("token {}", token))
@@ -273,20 +261,18 @@ impl YDocClient {
         token: &str,
         session_id: Option<&str>,
     ) -> Result<String> {
-        // Keep any base_url path prefix (e.g. /jupyter) by swapping the
-        // scheme in place and appending the room route to the existing path,
+        // ws_endpoint swaps the scheme in place and appends the room route
+        // onto the existing path, keeping any base_url prefix (e.g. /jupyter)
         // rather than rebuilding the URL from host/port (which drops it).
-        let ws_url_str = server_url
-            .replace("https://", "wss://")
-            .replace("http://", "ws://");
-        let mut ws_url = Url::parse(&ws_url_str).context("Invalid server URL")?;
-        {
-            let mut segments = ws_url
-                .path_segments_mut()
-                .map_err(|_| anyhow::anyhow!("Server URL cannot be a base"))?;
-            segments.push("api").push("collaboration").push("room");
-            segments.push(&format!("json:notebook:{}", file_id));
-        }
+        let mut ws_url = server_url::ws_endpoint(
+            server_url,
+            &[
+                "api",
+                "collaboration",
+                "room",
+                &format!("json:notebook:{}", file_id),
+            ],
+        )?;
 
         ws_url.query_pairs_mut().append_pair("token", token);
         if let Some(sid) = session_id {

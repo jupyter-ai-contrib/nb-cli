@@ -1,5 +1,6 @@
 //! HTTP client for Jupyter Server REST API
 
+use crate::execution::server_url;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -45,14 +46,15 @@ struct KernelSpec {
 }
 
 impl JupyterClient {
-    /// Create a new Jupyter Server client
+    /// Create a new Jupyter Server client. The URL is validated and
+    /// normalized eagerly so a bad URL fails here, not at first use.
     pub fn new(server_url: String, token: String) -> Result<Self> {
         let client = reqwest::Client::builder()
             .build()
             .context("Failed to create HTTP client")?;
 
         Ok(Self {
-            base_url: server_url.trim_end_matches('/').to_string(),
+            base_url: server_url::normalize(&server_url)?,
             token,
             client,
         })
@@ -60,10 +62,10 @@ impl JupyterClient {
 
     /// Test connection to the server
     pub async fn test_connection(&self) -> Result<()> {
-        let url = format!("{}/api", self.base_url);
+        let url = server_url::endpoint(&self.base_url, &["api"])?;
         let response = self
             .client
-            .get(&url)
+            .get(url)
             .query(&[("token", &self.token)])
             .send()
             .await
@@ -81,10 +83,10 @@ impl JupyterClient {
 
     /// Get kernel info by ID
     pub async fn get_kernel(&self, kernel_id: &str) -> Result<KernelInfo> {
-        let url = format!("{}/api/kernels/{}", self.base_url, kernel_id);
+        let url = server_url::endpoint(&self.base_url, &["api", "kernels", kernel_id])?;
         let response = self
             .client
-            .get(&url)
+            .get(url)
             .query(&[("token", &self.token)])
             .send()
             .await
@@ -103,10 +105,10 @@ impl JupyterClient {
     /// List all running kernels
     #[allow(dead_code)]
     pub async fn list_kernels(&self) -> Result<Vec<KernelInfo>> {
-        let url = format!("{}/api/kernels", self.base_url);
+        let url = server_url::endpoint(&self.base_url, &["api", "kernels"])?;
         let response = self
             .client
-            .get(&url)
+            .get(url)
             .query(&[("token", &self.token)])
             .send()
             .await
@@ -127,14 +129,14 @@ impl JupyterClient {
     /// Start a new kernel
     #[allow(dead_code)]
     pub async fn start_kernel(&self, kernel_name: &str) -> Result<KernelInfo> {
-        let url = format!("{}/api/kernels", self.base_url);
+        let url = server_url::endpoint(&self.base_url, &["api", "kernels"])?;
         let payload = serde_json::json!({
             "name": kernel_name
         });
 
         let response = self
             .client
-            .post(&url)
+            .post(url)
             .query(&[("token", &self.token)])
             .json(&payload)
             .send()
@@ -155,10 +157,10 @@ impl JupyterClient {
 
     /// List all sessions
     pub async fn list_sessions(&self) -> Result<Vec<SessionInfo>> {
-        let url = format!("{}/api/sessions", self.base_url);
+        let url = server_url::endpoint(&self.base_url, &["api", "sessions"])?;
         let response = self
             .client
-            .get(&url)
+            .get(url)
             .query(&[("token", &self.token)])
             .send()
             .await
@@ -184,7 +186,7 @@ impl JupyterClient {
         kernel_id: &str,
         kernel_name: &str,
     ) -> Result<SessionInfo> {
-        let url = format!("{}/api/sessions", self.base_url);
+        let url = server_url::endpoint(&self.base_url, &["api", "sessions"])?;
         let payload = CreateSessionRequest {
             path: notebook_path.to_string(),
             name: filename_from_path(notebook_path),
@@ -197,7 +199,7 @@ impl JupyterClient {
 
         let response = self
             .client
-            .post(&url)
+            .post(url)
             .query(&[("token", &self.token)])
             .json(&payload)
             .send()
@@ -228,7 +230,7 @@ impl JupyterClient {
         notebook_path: &str,
         kernel_name: &str,
     ) -> Result<SessionInfo> {
-        let url = format!("{}/api/sessions", self.base_url);
+        let url = server_url::endpoint(&self.base_url, &["api", "sessions"])?;
         let payload = CreateSessionRequest {
             path: notebook_path.to_string(),
             name: filename_from_path(notebook_path),
@@ -241,7 +243,7 @@ impl JupyterClient {
 
         let response = self
             .client
-            .post(&url)
+            .post(url)
             .query(&[("token", &self.token)])
             .json(&payload)
             .send()
@@ -264,10 +266,10 @@ impl JupyterClient {
 
     /// Restart a kernel
     pub async fn restart_kernel(&self, kernel_id: &str) -> Result<KernelInfo> {
-        let url = format!("{}/api/kernels/{}/restart", self.base_url, kernel_id);
+        let url = server_url::endpoint(&self.base_url, &["api", "kernels", kernel_id, "restart"])?;
         let response = self
             .client
-            .post(&url)
+            .post(url)
             .query(&[("token", &self.token)])
             .send()
             .await
@@ -286,10 +288,10 @@ impl JupyterClient {
     /// Delete a session
     #[allow(dead_code)]
     pub async fn delete_session(&self, session_id: &str) -> Result<()> {
-        let url = format!("{}/api/sessions/{}", self.base_url, session_id);
+        let url = server_url::endpoint(&self.base_url, &["api", "sessions", session_id])?;
         let response = self
             .client
-            .delete(&url)
+            .delete(url)
             .query(&[("token", &self.token)])
             .send()
             .await
@@ -303,19 +305,7 @@ impl JupyterClient {
     }
 
     fn contents_url(&self, path: &str) -> Result<String> {
-        let mut url = url::Url::parse(&self.base_url).context("Invalid server URL")?;
-        {
-            let mut segments = url
-                .path_segments_mut()
-                .map_err(|_| anyhow::anyhow!("Server URL cannot be a base"))?;
-            segments.push("api").push("contents");
-            for part in path.split('/') {
-                if !part.is_empty() {
-                    segments.push(part);
-                }
-            }
-        }
-        Ok(url.to_string())
+        Ok(server_url::endpoint_with_path(&self.base_url, &["api", "contents"], path)?.to_string())
     }
 
     /// Read a notebook from the server via the Contents API.
@@ -384,21 +374,14 @@ impl JupyterClient {
 
     /// Get the WebSocket URL for a kernel
     pub fn get_ws_url(&self, kernel_id: &str, session_id: Option<&str>) -> String {
-        let ws_base = self
-            .base_url
-            .replace("http://", "ws://")
-            .replace("https://", "wss://");
+        let mut url =
+            server_url::ws_endpoint(&self.base_url, &["api", "kernels", kernel_id, "channels"])
+                .expect("server URL was validated at construction");
         if let Some(sid) = session_id {
-            format!(
-                "{}/api/kernels/{}/channels?session_id={}&token={}",
-                ws_base, kernel_id, sid, self.token
-            )
-        } else {
-            format!(
-                "{}/api/kernels/{}/channels?token={}",
-                ws_base, kernel_id, self.token
-            )
+            url.query_pairs_mut().append_pair("session_id", sid);
         }
+        url.query_pairs_mut().append_pair("token", &self.token);
+        url.to_string()
     }
 
     /// Probe whether the server supports `POST /api/kernels/{id}/execute`.
@@ -406,7 +389,7 @@ impl JupyterClient {
     /// - 400 or 200 means the endpoint exists (server understands the route)
     /// - 404 or 405 means the endpoint is absent (fall back to kernel WS)
     pub async fn probe_execute_api(&self, kernel_id: &str) -> Result<bool> {
-        let url = format!("{}/api/kernels/{}/execute", self.base_url, kernel_id);
+        let url = server_url::endpoint(&self.base_url, &["api", "kernels", kernel_id, "execute"])?;
         let payload = serde_json::json!({
             "document_id": "",
             "cells": []
@@ -414,7 +397,7 @@ impl JupyterClient {
 
         let response = self
             .client
-            .post(&url)
+            .post(url)
             .query(&[("token", &self.token)])
             .json(&payload)
             .send()
@@ -438,11 +421,11 @@ impl JupyterClient {
         kernel_id: &str,
         request: &ExecuteCellsRequest,
     ) -> Result<ExecuteCellsResponse> {
-        let url = format!("{}/api/kernels/{}/execute", self.base_url, kernel_id);
+        let url = server_url::endpoint(&self.base_url, &["api", "kernels", kernel_id, "execute"])?;
 
         let response = self
             .client
-            .post(&url)
+            .post(url)
             .query(&[("token", &self.token)])
             .json(request)
             .send()
@@ -598,6 +581,32 @@ mod tests {
             "trailing slash must not produce double-slash in URL: {url}"
         );
         assert!(url.contains("/api/kernels/k/channels"));
+    }
+
+    #[test]
+    fn test_get_ws_url_preserves_base_url_prefix() {
+        // Server mounted under a base_url (e.g. /jupyter) — the ws URL must
+        // keep the prefix, not rebuild from host/port.
+        let c = client("https://host/jupyter");
+        let url = c.get_ws_url("kid1", None);
+        assert_eq!(
+            url,
+            "wss://host/jupyter/api/kernels/kid1/channels?token=tok"
+        );
+
+        let c = client("http://host:8888/foo/bar/");
+        let url = c.get_ws_url("kid2", Some("sid"));
+        assert_eq!(
+            url,
+            "ws://host:8888/foo/bar/api/kernels/kid2/channels?session_id=sid&token=tok"
+        );
+    }
+
+    #[test]
+    fn test_new_rejects_invalid_server_url() {
+        assert!(JupyterClient::new("not a url".to_string(), "t".to_string()).is_err());
+        assert!(JupyterClient::new("host:8888".to_string(), "t".to_string()).is_err());
+        assert!(JupyterClient::new("ftp://host".to_string(), "t".to_string()).is_err());
     }
 
     #[test]
