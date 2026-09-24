@@ -285,6 +285,12 @@ pub async fn ydoc_clear_outputs(
         .context("Failed to clear outputs in Y.js document")?;
 
     ydoc_client.sync().await.context("Failed to sync changes")?;
+    if !ydoc_client.server_writes_outputs() {
+        ydoc_client
+            .save_now()
+            .await
+            .context("Failed to persist cleared outputs")?;
+    }
     ydoc_client.close().await?;
 
     Ok(cells_cleared)

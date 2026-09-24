@@ -888,15 +888,18 @@ fn test_execute_input_fails_fast() {
 
 /// Clear all outputs from a notebook in connect mode.
 ///
-/// Ignored against jupyter-collaboration: `nb output clear` correctly edits the
-/// Y.js room, but jupyter_server_ydoc only flushes the room to disk on a ~1s
-/// debounced timer, so the immediate `nb read` below races that debounce and
-/// observes stale content. Distinct from #90 (jupyter-server-documents' clear
-/// never persists at all, permanently, due to externalized-output
-/// re-materialization); see #100 for the jupyter-collaboration mechanism.
+/// jupyter-collaboration persists room changes on a debounce by default. The
+/// realtime clear path requests the server's manual-save protocol so the
+/// Contents API read below observes the change immediately (issue #100).
+/// jupyter-server-documents remains covered by its separate permanent
+/// persistence issue (#90), so this test is intentionally scoped to the
+/// collaboration backend.
 #[test]
-#[ignore = "jupyter-collaboration: read-after-write races jupyter_server_ydoc's ~1s save debounce, see jupyter-ai-contrib/nb-cli#100"]
 fn test_clear_outputs_in_connect_mode() {
+    if test_helpers::test_backend() != "jupyter-collaboration" {
+        eprintln!("⚠️  Skipping: output-clear persistence test requires jupyter-collaboration");
+        return;
+    }
     let Some(ctx) = TestCtx::new() else {
         eprintln!("⚠️  Skipping connect-mode test: jupyter server not available");
         return;
@@ -935,11 +938,14 @@ fn test_clear_outputs_in_connect_mode() {
 
 /// Clear outputs from a specific cell by index in connect mode.
 ///
-/// Ignored against jupyter-collaboration for the same reason as
-/// `test_clear_outputs_in_connect_mode` above: see jupyter-ai-contrib/nb-cli#100.
+/// Verify that the manual-save path also persists a targeted clear without
+/// delaying the following Contents API read (issue #100).
 #[test]
-#[ignore = "jupyter-collaboration: read-after-write races jupyter_server_ydoc's ~1s save debounce, see jupyter-ai-contrib/nb-cli#100"]
 fn test_clear_outputs_specific_cell_in_connect_mode() {
+    if test_helpers::test_backend() != "jupyter-collaboration" {
+        eprintln!("⚠️  Skipping: output-clear persistence test requires jupyter-collaboration");
+        return;
+    }
     let Some(ctx) = TestCtx::new() else {
         eprintln!("⚠️  Skipping connect-mode test: jupyter server not available");
         return;
