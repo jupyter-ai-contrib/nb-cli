@@ -6,6 +6,7 @@ use nbformat::v4::Output;
 use reqwest::Client as HttpClient;
 use serde::Deserialize;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
+use yrs::encoding::read::{Cursor, Read as EncodingRead};
 use yrs::encoding::varint::VarInt;
 use yrs::encoding::write::Write;
 use yrs::types::ToJson;
@@ -56,6 +57,53 @@ struct CollabSessionResponse {
     file_id: String,
     #[serde(rename = "sessionId")]
     session_id: String,
+}
+
+const RAW_MESSAGE_TYPE: u8 = 2;
+const SAVE_REQUEST_ID: u32 = 0;
+
+#[derive(Debug, Deserialize)]
+struct SaveReply {
+    #[serde(rename = "type")]
+    message_type: String,
+    #[serde(rename = "responseTo")]
+    response_to: u32,
+    status: String,
+}
+
+/// Encode the raw message used by jupyter-server-ydoc for manual saves.
+///
+/// The protocol is deliberately kept here instead of depending on a Python
+/// client implementation: `[RAW, "save", request_id]` asks a collaboration
+/// room to bypass its autosave debounce and flush the current YDoc.
+fn encode_save_request(request_id: u32) -> Vec<u8> {
+    let mut message = Vec::new();
+    message.write_var(RAW_MESSAGE_TYPE);
+    message.write_string("save");
+    message.write_var(request_id);
+    message
+}
+
+/// Decode a raw save reply. Non-save messages are ignored by returning None.
+fn decode_save_reply(data: &[u8], request_id: u32) -> Result<Option<String>> {
+    let mut decoder = Cursor::new(data);
+    let message_type: u8 = decoder
+        .read_var()
+        .context("Failed to read raw message type")?;
+    if message_type != RAW_MESSAGE_TYPE {
+        return Ok(None);
+    }
+
+    let payload = decoder
+        .read_string()
+        .context("Failed to read raw message payload")?;
+    let reply: SaveReply =
+        serde_json::from_str(payload).context("Failed to parse jupyter-server-ydoc save reply")?;
+    if reply.message_type != "save" || reply.response_to != request_id {
+        return Ok(None);
+    }
+
+    Ok(Some(reply.status))
 }
 
 /// Definitive signal that the server has no compatible Y.js backend: neither
@@ -590,6 +638,51 @@ impl YDocClient {
         Ok(())
     }
 
+    /// Request an immediate disk flush from jupyter-collaboration.
+    ///
+    /// jupyter-collaboration persists room changes after an inactivity delay.
+    /// Its raw WebSocket protocol provides a manual `save` message that skips
+    /// that delay and acknowledges the completed write. The
+    /// jupyter-server-documents backend owns persistence itself and does not
+    /// implement this message, so callers only use this method for the
+    /// collaboration path.
+    pub async fn save_now(&mut self) -> Result<()> {
+        let request = encode_save_request(SAVE_REQUEST_ID);
+        self.ws
+            .send(Message::binary(request))
+            .await
+            .context("Failed to request immediate notebook save")?;
+        self.ws
+            .flush()
+            .await
+            .context("Failed to flush immediate save request")?;
+
+        let deadline = std::time::Duration::from_secs(3);
+        loop {
+            let message = tokio::time::timeout(deadline, self.ws.next())
+                .await
+                .context("Timed out waiting for immediate notebook save")?
+                .ok_or_else(|| anyhow::anyhow!("Y.js WebSocket closed while saving notebook"))?
+                .context("Y.js WebSocket error while saving notebook")?;
+
+            let Message::Binary(data) = message else {
+                continue;
+            };
+
+            let Some(status) = decode_save_reply(&data, SAVE_REQUEST_ID)? else {
+                continue;
+            };
+
+            match status.as_str() {
+                "success" | "skipped" => return Ok(()),
+                other => anyhow::bail!(
+                    "jupyter-server-ydoc failed to save notebook (status: {})",
+                    other
+                ),
+            }
+        }
+    }
+
     /// Get a reference to the Y.js document
     pub fn get_doc(&self) -> &Doc {
         &self.doc
@@ -725,9 +818,13 @@ impl YDocClient {
 
 #[cfg(test)]
 mod fileid_classification_tests {
-    use super::{is_yjs_unavailable, YDocClient, YjsUnavailable};
+    use super::{
+        decode_save_reply, encode_save_request, is_yjs_unavailable, YDocClient, YjsUnavailable,
+        RAW_MESSAGE_TYPE,
+    };
     use anyhow::{anyhow, Context};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use yrs::encoding::write::Write;
 
     /// Minimal stub that replies to every request with the given status.
     /// get_file_id may hit two endpoints (fileid/index, then
@@ -1006,5 +1103,26 @@ mod fileid_classification_tests {
 
         let unrelated = anyhow!("connection refused");
         assert!(!is_yjs_unavailable(&unrelated));
+    }
+
+    #[test]
+    fn save_request_uses_jupyter_server_ydoc_raw_protocol() {
+        assert_eq!(
+            encode_save_request(7),
+            vec![RAW_MESSAGE_TYPE, 4, b's', b'a', b'v', b'e', 7]
+        );
+    }
+
+    #[test]
+    fn save_reply_matches_request_id_and_status() {
+        let payload = r#"{"type":"save","responseTo":7,"status":"success"}"#;
+        let mut response = vec![RAW_MESSAGE_TYPE];
+        response.write_string(payload);
+
+        assert_eq!(
+            decode_save_reply(&response, 7).unwrap(),
+            Some("success".to_string())
+        );
+        assert_eq!(decode_save_reply(&response, 8).unwrap(), None);
     }
 }
