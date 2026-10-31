@@ -15,6 +15,21 @@ use client::{JupyterClient, SessionInfo};
 use websocket::KernelWebSocket;
 use ydoc::YDocClient;
 
+/// Attach token authentication without putting credentials in request URLs.
+pub(super) trait TokenAuth {
+    fn token_auth(self, token: &str) -> Self;
+}
+
+impl TokenAuth for reqwest::RequestBuilder {
+    fn token_auth(self, token: &str) -> Self {
+        if token.is_empty() {
+            self
+        } else {
+            self.header(reqwest::header::AUTHORIZATION, format!("token {token}"))
+        }
+    }
+}
+
 /// Remote execution backend using Jupyter Server
 pub struct RemoteExecutor {
     pub(super) config: ExecutionConfig,
@@ -59,7 +74,7 @@ impl RemoteExecutor {
             .as_ref()
             .context("Jupyter session not available")?;
         let ws_url = client.get_ws_url(&session.kernel.id, Some(&session.id));
-        let ws = KernelWebSocket::connect(&ws_url)
+        let ws = KernelWebSocket::connect_with_token(&ws_url, &self.token)
             .await
             .context("Failed to reconnect to kernel WebSocket")?;
         self.ws = Some(ws);
@@ -140,7 +155,7 @@ impl ExecutionBackend for RemoteExecutor {
 
         // Connect to kernel via WebSocket with session_id
         let ws_url = client.get_ws_url(&session.kernel.id, Some(&session.id));
-        let mut ws = KernelWebSocket::connect(&ws_url)
+        let mut ws = KernelWebSocket::connect_with_token(&ws_url, &self.token)
             .await
             .context("Failed to connect to kernel WebSocket")?;
 

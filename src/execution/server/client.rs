@@ -1,5 +1,6 @@
 //! HTTP client for Jupyter Server REST API
 
+use super::TokenAuth;
 use crate::execution::server_url;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -66,7 +67,7 @@ impl JupyterClient {
         let response = self
             .client
             .get(url)
-            .query(&[("token", &self.token)])
+            .token_auth(&self.token)
             .send()
             .await
             .context("Failed to connect to Jupyter Server")?;
@@ -87,7 +88,7 @@ impl JupyterClient {
         let response = self
             .client
             .get(url)
-            .query(&[("token", &self.token)])
+            .token_auth(&self.token)
             .send()
             .await
             .context("Failed to get kernel info")?;
@@ -109,7 +110,7 @@ impl JupyterClient {
         let response = self
             .client
             .get(url)
-            .query(&[("token", &self.token)])
+            .token_auth(&self.token)
             .send()
             .await
             .context("Failed to list kernels")?;
@@ -137,7 +138,7 @@ impl JupyterClient {
         let response = self
             .client
             .post(url)
-            .query(&[("token", &self.token)])
+            .token_auth(&self.token)
             .json(&payload)
             .send()
             .await
@@ -161,7 +162,7 @@ impl JupyterClient {
         let response = self
             .client
             .get(url)
-            .query(&[("token", &self.token)])
+            .token_auth(&self.token)
             .send()
             .await
             .context("Failed to list sessions")?;
@@ -200,7 +201,7 @@ impl JupyterClient {
         let response = self
             .client
             .post(url)
-            .query(&[("token", &self.token)])
+            .token_auth(&self.token)
             .json(&payload)
             .send()
             .await
@@ -244,7 +245,7 @@ impl JupyterClient {
         let response = self
             .client
             .post(url)
-            .query(&[("token", &self.token)])
+            .token_auth(&self.token)
             .json(&payload)
             .send()
             .await
@@ -270,7 +271,7 @@ impl JupyterClient {
         let response = self
             .client
             .post(url)
-            .query(&[("token", &self.token)])
+            .token_auth(&self.token)
             .send()
             .await
             .context("Failed to restart kernel")?;
@@ -292,7 +293,7 @@ impl JupyterClient {
         let response = self
             .client
             .delete(url)
-            .query(&[("token", &self.token)])
+            .token_auth(&self.token)
             .send()
             .await
             .context("Failed to delete session")?;
@@ -315,11 +316,8 @@ impl JupyterClient {
         let response = self
             .client
             .get(&url)
-            .query(&[
-                ("token", self.token.as_str()),
-                ("content", "1"),
-                ("type", "notebook"),
-            ])
+            .token_auth(&self.token)
+            .query(&[("content", "1"), ("type", "notebook")])
             .send()
             .await
             .context("Failed to fetch notebook from server")?;
@@ -357,7 +355,7 @@ impl JupyterClient {
         let response = self
             .client
             .put(&url)
-            .query(&[("token", self.token.as_str())])
+            .token_auth(&self.token)
             .json(&payload)
             .send()
             .await
@@ -380,7 +378,6 @@ impl JupyterClient {
         if let Some(sid) = session_id {
             url.query_pairs_mut().append_pair("session_id", sid);
         }
-        url.query_pairs_mut().append_pair("token", &self.token);
         url.to_string()
     }
 
@@ -398,7 +395,7 @@ impl JupyterClient {
         let response = self
             .client
             .post(url)
-            .query(&[("token", &self.token)])
+            .token_auth(&self.token)
             .json(&payload)
             .send()
             .await
@@ -426,7 +423,7 @@ impl JupyterClient {
         let response = self
             .client
             .post(url)
-            .query(&[("token", &self.token)])
+            .token_auth(&self.token)
             .json(request)
             .send()
             .await
@@ -551,20 +548,74 @@ mod tests {
         JupyterClient::new(base_url.to_string(), "tok".to_string()).unwrap()
     }
 
+    #[tokio::test]
+    async fn get_notebook_authenticates_without_url_credentials() {
+        use std::time::Duration;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let c = client(&format!("http://{addr}"));
+        let server = async {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = BufReader::new(stream);
+            let mut request = String::new();
+            loop {
+                let mut line = String::new();
+                assert_ne!(stream.read_line(&mut line).await.unwrap(), 0);
+                if line == "\r\n" {
+                    break;
+                }
+                request.push_str(&line);
+            }
+            let body = r#"{"content":{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream
+                .get_mut()
+                .write_all(response.as_bytes())
+                .await
+                .unwrap();
+            request
+        };
+
+        let (request, notebook) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::join!(server, c.get_notebook("example.ipynb"))
+        })
+        .await
+        .expect("Contents API request timed out");
+        assert!(notebook.unwrap().cells.is_empty());
+
+        let mut lines = request.lines();
+        let request_line = lines.next().unwrap();
+        let mut parts = request_line.split_whitespace();
+        assert_eq!(parts.next(), Some("GET"));
+        let url = url::Url::parse(&format!("http://{addr}{}", parts.next().unwrap())).unwrap();
+        assert_eq!(url.path(), "/api/contents/example.ipynb");
+        let query: std::collections::HashMap<_, _> = url.query_pairs().collect();
+        assert!(!query.contains_key("token"));
+        assert_eq!(query.get("content").map(|v| v.as_ref()), Some("1"));
+        assert_eq!(query.get("type").map(|v| v.as_ref()), Some("notebook"));
+        let authorization = lines
+            .filter_map(|line| line.split_once(':'))
+            .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+            .map(|(_, value)| value.trim());
+        assert_eq!(authorization, Some("token tok"));
+    }
+
     #[test]
     fn test_get_ws_url_formats() {
         let c = client("http://127.0.0.1:8888");
 
         let url = c.get_ws_url("kid1", None);
-        assert_eq!(
-            url,
-            "ws://127.0.0.1:8888/api/kernels/kid1/channels?token=tok"
-        );
+        assert_eq!(url, "ws://127.0.0.1:8888/api/kernels/kid1/channels");
 
         let url = c.get_ws_url("kid2", Some("sid42"));
         assert_eq!(
             url,
-            "ws://127.0.0.1:8888/api/kernels/kid2/channels?session_id=sid42&token=tok"
+            "ws://127.0.0.1:8888/api/kernels/kid2/channels?session_id=sid42"
         );
 
         let c_https = client("https://example.com");
@@ -589,16 +640,13 @@ mod tests {
         // keep the prefix, not rebuild from host/port.
         let c = client("https://host/jupyter");
         let url = c.get_ws_url("kid1", None);
-        assert_eq!(
-            url,
-            "wss://host/jupyter/api/kernels/kid1/channels?token=tok"
-        );
+        assert_eq!(url, "wss://host/jupyter/api/kernels/kid1/channels");
 
         let c = client("http://host:8888/foo/bar/");
         let url = c.get_ws_url("kid2", Some("sid"));
         assert_eq!(
             url,
-            "ws://host:8888/foo/bar/api/kernels/kid2/channels?session_id=sid&token=tok"
+            "ws://host:8888/foo/bar/api/kernels/kid2/channels?session_id=sid"
         );
     }
 

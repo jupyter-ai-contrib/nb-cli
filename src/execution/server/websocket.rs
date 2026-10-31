@@ -55,6 +55,15 @@ impl KernelWebSocket {
         Ok(Self { write, read })
     }
 
+    /// Connect using a server token, or anonymously when no token is configured.
+    pub async fn connect_with_token(ws_url: &str, token: &str) -> Result<Self> {
+        if token.is_empty() {
+            Self::connect(ws_url).await
+        } else {
+            Self::connect_with_auth(ws_url, &format!("token {token}")).await
+        }
+    }
+
     /// Connect to a kernel via WebSocket with an `Authorization` header.
     ///
     /// Used by the kernel-gateway path, which authenticates the WS upgrade
@@ -396,6 +405,57 @@ impl KernelWebSocket {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn connect_with_token_authenticates_upgrade_without_url_credentials() {
+        use std::time::Duration;
+        use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+
+        for token in ["test-token", ""] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut recorded = None;
+                let ws = tokio_tungstenite::accept_hdr_async(
+                    stream,
+                    |request: &Request, mut response: Response| {
+                        recorded = Some((request.uri().to_string(), request.headers().clone()));
+                        response.headers_mut().insert(
+                            SEC_WEBSOCKET_PROTOCOL,
+                            HeaderValue::from_static("v1.kernel.websocket.jupyter.org"),
+                        );
+                        Ok(response)
+                    },
+                )
+                .await
+                .unwrap();
+                (ws, recorded.unwrap())
+            });
+
+            let ws = tokio::time::timeout(
+                Duration::from_secs(5),
+                KernelWebSocket::connect_with_token(
+                    &format!("ws://{addr}/api/kernels/k/channels?session_id=sid"),
+                    token,
+                ),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let (_server_ws, (uri, headers)) = tokio::time::timeout(Duration::from_secs(5), server)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(uri, "/api/kernels/k/channels?session_id=sid");
+            if token.is_empty() {
+                assert!(!headers.contains_key("Authorization"));
+            } else {
+                assert_eq!(headers["Authorization"], "token test-token");
+            }
+            drop(ws);
+        }
+    }
 
     #[tokio::test]
     async fn connect_with_auth_rejects_server_without_v1_subprotocol() {
