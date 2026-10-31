@@ -61,24 +61,11 @@ impl JupyterClient {
         })
     }
 
-    /// Test connection to the server
+    /// Validate access to a protected API, not the anonymous `/api` endpoint.
     pub async fn test_connection(&self) -> Result<()> {
-        let url = server_url::endpoint(&self.base_url, &["api"])?;
-        let response = self
-            .client
-            .get(url)
-            .token_auth(&self.token)
-            .send()
+        self.list_kernels()
             .await
-            .context("Failed to connect to Jupyter Server")?;
-
-        if !response.status().is_success() {
-            anyhow::bail!(
-                "Failed to connect to Jupyter Server: HTTP {}",
-                response.status()
-            );
-        }
-
+            .context("Failed to validate Jupyter Server connection")?;
         Ok(())
     }
 
@@ -104,7 +91,6 @@ impl JupyterClient {
     }
 
     /// List all running kernels
-    #[allow(dead_code)]
     pub async fn list_kernels(&self) -> Result<Vec<KernelInfo>> {
         let url = server_url::endpoint(&self.base_url, &["api", "kernels"])?;
         let response = self
@@ -603,6 +589,58 @@ mod tests {
             .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
             .map(|(_, value)| value.trim());
         assert_eq!(authorization, Some("token tok"));
+    }
+
+    #[tokio::test]
+    async fn test_connection_validates_protected_api_response() {
+        use std::time::Duration;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        for (token, status, body, expected_error) in [
+            ("tok", "200 OK", "[]", None),
+            ("invalid", "403 Forbidden", "{}", Some("HTTP 403")),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let c = JupyterClient::new(format!("http://{addr}"), token.into()).unwrap();
+            let server = async {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut stream = BufReader::new(stream);
+                let mut request = String::new();
+                loop {
+                    let mut line = String::new();
+                    assert_ne!(stream.read_line(&mut line).await.unwrap(), 0);
+                    if line == "\r\n" {
+                        break;
+                    }
+                    request.push_str(&line);
+                }
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream
+                    .get_mut()
+                    .write_all(response.as_bytes())
+                    .await
+                    .unwrap();
+                request
+            };
+            let (request, result) = tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::join!(server, c.test_connection())
+            })
+            .await
+            .expect("Connection validation timed out");
+
+            match expected_error {
+                Some(message) => {
+                    let error = format!("{:#}", result.unwrap_err());
+                    assert!(error.contains(message), "{error}");
+                }
+                None => result.unwrap(),
+            }
+            assert!(request.starts_with("GET /api/kernels HTTP/1.1\r\n"));
+        }
     }
 
     #[test]
