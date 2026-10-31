@@ -3,7 +3,7 @@
 //! attached, so outputs can be observed via the Y.js document instead of
 //! (or in addition to) the kernel WebSocket directly.
 
-use super::RemoteExecutor;
+use super::{RemoteExecutor, TokenAuth};
 use crate::execution::server::client::{
     compute_source_hash, ExecuteCellSpec, ExecuteCellsRequest, ExecuteCellsResponse,
 };
@@ -33,12 +33,7 @@ async fn fetch_output(
     tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
 
     loop {
-        if let Ok(resp) = http
-            .get(url.clone())
-            .query(&[("token", token)])
-            .send()
-            .await
-        {
+        if let Ok(resp) = http.get(url.clone()).token_auth(token).send().await {
             if resp.status().is_success() {
                 if let Ok(text) = resp.text().await {
                     if let Ok(output) = serde_json::from_str::<nbformat::v4::Output>(&text) {

@@ -5,7 +5,11 @@ use futures_util::{SinkExt, StreamExt};
 use nbformat::v4::Output;
 use reqwest::Client as HttpClient;
 use serde::Deserialize;
-use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{client::IntoClientRequest, Message},
+    MaybeTlsStream, WebSocketStream,
+};
 use yrs::encoding::varint::VarInt;
 use yrs::encoding::write::Write;
 use yrs::types::ToJson;
@@ -14,6 +18,7 @@ use yrs::updates::encoder::Encode;
 use yrs::{Array, ArrayRef, Doc, GetString, Map, ReadTxn, StateVector, Transact, Update};
 
 use super::output_conversion::{update_cell_execution_count, update_cell_outputs};
+use super::TokenAuth;
 use crate::execution::server_url;
 
 /// Outputs and execution_count read from a Y.js cell
@@ -119,9 +124,20 @@ impl YDocClient {
         let (file_id, session_id) = Self::get_file_id(&server_url, &token, &notebook_path).await?;
 
         // Step 2: Connect to room WebSocket
-        let ws_url = Self::build_room_ws_url(&server_url, &file_id, &token, session_id.as_deref())?;
+        let ws_url = Self::build_room_ws_url(&server_url, &file_id, session_id.as_deref())?;
 
-        let (ws_stream, _) = connect_async(&ws_url)
+        let mut request = ws_url
+            .into_client_request()
+            .context("Invalid Y.js room WebSocket URL")?;
+        if !token.is_empty() {
+            request.headers_mut().insert(
+                "Authorization",
+                format!("token {token}")
+                    .parse()
+                    .context("Invalid Authorization header value")?,
+            );
+        }
+        let (ws_stream, _) = connect_async(request)
             .await
             .context("Failed to connect to Y.js room WebSocket")?;
 
@@ -172,7 +188,7 @@ impl YDocClient {
         let response = http_client
             .post(index_url)
             .query(&[("path", notebook_path)])
-            .header("Authorization", format!("token {}", token))
+            .token_auth(token)
             .send()
             .await
             .map_err(|e| {
@@ -221,7 +237,7 @@ impl YDocClient {
         )?;
         let response = http_client
             .put(session_url)
-            .header("Authorization", format!("token {}", token))
+            .token_auth(token)
             .header("Content-Type", "application/json")
             .body(r#"{"format":"json","type":"notebook"}"#)
             .send()
@@ -258,7 +274,6 @@ impl YDocClient {
     fn build_room_ws_url(
         server_url: &str,
         file_id: &str,
-        token: &str,
         session_id: Option<&str>,
     ) -> Result<String> {
         // ws_endpoint swaps the scheme in place and appends the room route
@@ -274,7 +289,6 @@ impl YDocClient {
             ],
         )?;
 
-        ws_url.query_pairs_mut().append_pair("token", token);
         if let Some(sid) = session_id {
             ws_url.query_pairs_mut().append_pair("sessionId", sid);
         }
@@ -810,16 +824,14 @@ mod fileid_classification_tests {
 
     #[test]
     fn build_room_ws_url_appends_session_id_when_present() {
-        let url =
-            YDocClient::build_room_ws_url("http://localhost:8888", "file-1", "tok", Some("sess-1"))
-                .unwrap();
+        let url = YDocClient::build_room_ws_url("http://localhost:8888", "file-1", Some("sess-1"))
+            .unwrap();
         assert!(url.contains("sessionId=sess-1"), "url was: {}", url);
     }
 
     #[test]
     fn build_room_ws_url_omits_session_id_when_absent() {
-        let url =
-            YDocClient::build_room_ws_url("http://localhost:8888", "file-1", "tok", None).unwrap();
+        let url = YDocClient::build_room_ws_url("http://localhost:8888", "file-1", None).unwrap();
         assert!(!url.contains("sessionId"), "url was: {}", url);
     }
 
@@ -827,31 +839,23 @@ mod fileid_classification_tests {
     fn build_room_ws_url_preserves_base_url_prefix() {
         // Server served under a base_url (e.g. https://host/jupyter) must keep
         // the /jupyter prefix on the Y.js room WebSocket URL.
-        let url = YDocClient::build_room_ws_url(
-            "https://my-jupyter.example.com/jupyter",
-            "file-1",
-            "tok",
-            None,
-        )
-        .unwrap();
+        let url =
+            YDocClient::build_room_ws_url("https://my-jupyter.example.com/jupyter", "file-1", None)
+                .unwrap();
         assert_eq!(
             url,
-            "wss://my-jupyter.example.com/jupyter/api/collaboration/room/json:notebook:file-1?token=tok"
+            "wss://my-jupyter.example.com/jupyter/api/collaboration/room/json:notebook:file-1"
         );
     }
 
     #[test]
     fn build_room_ws_url_preserves_base_url_prefix_with_port() {
-        let url = YDocClient::build_room_ws_url(
-            "http://host:8888/foo/bar",
-            "file-1",
-            "tok",
-            Some("sess-1"),
-        )
-        .unwrap();
+        let url =
+            YDocClient::build_room_ws_url("http://host:8888/foo/bar", "file-1", Some("sess-1"))
+                .unwrap();
         assert_eq!(
             url,
-            "ws://host:8888/foo/bar/api/collaboration/room/json:notebook:file-1?token=tok&sessionId=sess-1"
+            "ws://host:8888/foo/bar/api/collaboration/room/json:notebook:file-1?sessionId=sess-1"
         );
     }
 
