@@ -534,38 +534,41 @@ mod tests {
         JupyterClient::new(base_url.to_string(), "tok".to_string()).unwrap()
     }
 
+    async fn serve_response(listener: tokio::net::TcpListener, status: &str, body: &str) -> String {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut stream = BufReader::new(stream);
+        let mut request = String::new();
+        loop {
+            let mut line = String::new();
+            assert_ne!(stream.read_line(&mut line).await.unwrap(), 0);
+            if line == "\r\n" {
+                break;
+            }
+            request.push_str(&line);
+        }
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream
+            .get_mut()
+            .write_all(response.as_bytes())
+            .await
+            .unwrap();
+        request
+    }
+
     #[tokio::test]
     async fn get_notebook_authenticates_without_url_credentials() {
         use std::time::Duration;
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let c = client(&format!("http://{addr}"));
-        let server = async {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut stream = BufReader::new(stream);
-            let mut request = String::new();
-            loop {
-                let mut line = String::new();
-                assert_ne!(stream.read_line(&mut line).await.unwrap(), 0);
-                if line == "\r\n" {
-                    break;
-                }
-                request.push_str(&line);
-            }
-            let body = r#"{"content":{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}}"#;
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            stream
-                .get_mut()
-                .write_all(response.as_bytes())
-                .await
-                .unwrap();
-            request
-        };
+        let body = r#"{"content":{"cells":[],"metadata":{},"nbformat":4,"nbformat_minor":5}}"#;
+        let server = serve_response(listener, "200 OK", body);
 
         let (request, notebook) = tokio::time::timeout(Duration::from_secs(5), async {
             tokio::join!(server, c.get_notebook("example.ipynb"))
@@ -594,7 +597,6 @@ mod tests {
     #[tokio::test]
     async fn test_connection_validates_protected_api_response() {
         use std::time::Duration;
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
         for (token, status, body, expected_error) in [
             ("tok", "200 OK", "[]", None),
@@ -603,29 +605,7 @@ mod tests {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let addr = listener.local_addr().unwrap();
             let c = JupyterClient::new(format!("http://{addr}"), token.into()).unwrap();
-            let server = async {
-                let (stream, _) = listener.accept().await.unwrap();
-                let mut stream = BufReader::new(stream);
-                let mut request = String::new();
-                loop {
-                    let mut line = String::new();
-                    assert_ne!(stream.read_line(&mut line).await.unwrap(), 0);
-                    if line == "\r\n" {
-                        break;
-                    }
-                    request.push_str(&line);
-                }
-                let response = format!(
-                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                stream
-                    .get_mut()
-                    .write_all(response.as_bytes())
-                    .await
-                    .unwrap();
-                request
-            };
+            let server = serve_response(listener, status, body);
             let (request, result) = tokio::time::timeout(Duration::from_secs(5), async {
                 tokio::join!(server, c.test_connection())
             })

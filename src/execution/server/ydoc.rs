@@ -18,6 +18,7 @@ use yrs::updates::encoder::Encode;
 use yrs::{Array, ArrayRef, Doc, GetString, Map, ReadTxn, StateVector, Transact, Update};
 
 use super::output_conversion::{update_cell_execution_count, update_cell_outputs};
+use super::websocket::apply_token_auth;
 use super::TokenAuth;
 use crate::execution::server_url;
 
@@ -129,14 +130,7 @@ impl YDocClient {
         let mut request = ws_url
             .into_client_request()
             .context("Invalid Y.js room WebSocket URL")?;
-        if !token.is_empty() {
-            request.headers_mut().insert(
-                "Authorization",
-                format!("token {token}")
-                    .parse()
-                    .context("Invalid Authorization header value")?,
-            );
-        }
+        apply_token_auth(&mut request, &token)?;
         let (ws_stream, _) = connect_async(request)
             .await
             .context("Failed to connect to Y.js room WebSocket")?;
