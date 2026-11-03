@@ -102,7 +102,7 @@ fn validate_connection(conn: &crate::config::JupyterConnection) -> Result<()> {
             Ok(())
         }
         Err(e) => {
-            println!("✗ Connection failed: {}", e);
+            println!("✗ Connection failed: {:#}", e);
             println!("\nTo connect again:");
             println!("1. Make sure a Jupyter server is running");
             println!("2. Use `nb connect --uv` if server is running in uv env");
