@@ -5,9 +5,22 @@ use futures_util::{SinkExt, StreamExt};
 use jupyter_protocol::messaging::{JupyterMessage, JupyterMessageContent};
 use tokio_tungstenite::tungstenite::{
     client::IntoClientRequest,
+    handshake::client::Request,
     http::header::{HeaderValue, SEC_WEBSOCKET_PROTOCOL},
     Message,
 };
+
+pub(super) fn apply_token_auth(request: &mut Request, token: &str) -> Result<()> {
+    if !token.is_empty() {
+        request.headers_mut().insert(
+            "Authorization",
+            format!("token {token}")
+                .parse()
+                .context("Invalid Authorization header value")?,
+        );
+    }
+    Ok(())
+}
 
 /// WebSocket connection to a Jupyter kernel
 pub struct KernelWebSocket {
@@ -27,41 +40,22 @@ pub struct KernelWebSocket {
 impl KernelWebSocket {
     /// Connect to a kernel via WebSocket
     pub async fn connect(ws_url: &str) -> Result<Self> {
-        let mut request = ws_url
+        let request = ws_url
             .into_client_request()
             .context("Invalid WebSocket URL")?;
-        request.headers_mut().insert(
-            SEC_WEBSOCKET_PROTOCOL,
-            HeaderValue::from_static("v1.kernel.websocket.jupyter.org"),
-        );
-        let (ws_stream, response) = tokio_tungstenite::connect_async(request)
-            .await
-            .context("Failed to connect to kernel WebSocket")?;
-
-        let accepted = response
-            .headers()
-            .get(SEC_WEBSOCKET_PROTOCOL)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if accepted != "v1.kernel.websocket.jupyter.org" {
-            anyhow::bail!(
-                "Server does not support WebSocket v1 kernel protocol (got {:?})",
-                accepted
-            );
-        }
-
-        let (write, read) = ws_stream.split();
-
-        Ok(Self { write, read })
+        Self::connect_request(request).await
     }
 
     /// Connect using a server token, or anonymously when no token is configured.
     pub async fn connect_with_token(ws_url: &str, token: &str) -> Result<Self> {
         if token.is_empty() {
-            Self::connect(ws_url).await
-        } else {
-            Self::connect_with_auth(ws_url, &format!("token {token}")).await
+            return Self::connect(ws_url).await;
         }
+        let mut request = ws_url
+            .into_client_request()
+            .context("Invalid WebSocket URL")?;
+        apply_token_auth(&mut request, token)?;
+        Self::connect_request(request).await
     }
 
     /// Connect to a kernel via WebSocket with an `Authorization` header.
@@ -70,8 +64,6 @@ impl KernelWebSocket {
     /// with e.g. `Authorization: token <gateway-token>`. `auth_value` is the
     /// full header value (e.g. `"token notebooks"`).
     pub async fn connect_with_auth(ws_url: &str, auth_value: &str) -> Result<Self> {
-        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-
         let mut req = ws_url
             .into_client_request()
             .context("Failed to build kernel WebSocket request")?;
@@ -81,14 +73,15 @@ impl KernelWebSocket {
                 .parse()
                 .context("Invalid Authorization header value")?,
         );
-        req.headers_mut().insert(
-            "Sec-WebSocket-Protocol",
-            "v1.kernel.websocket.jupyter.org"
-                .parse()
-                .context("Invalid Sec-WebSocket-Protocol value")?,
-        );
+        Self::connect_request(req).await
+    }
 
-        let (ws_stream, response) = tokio_tungstenite::connect_async(req)
+    async fn connect_request(mut request: Request) -> Result<Self> {
+        request.headers_mut().insert(
+            SEC_WEBSOCKET_PROTOCOL,
+            HeaderValue::from_static("v1.kernel.websocket.jupyter.org"),
+        );
+        let (ws_stream, response) = tokio_tungstenite::connect_async(request)
             .await
             .context("Failed to connect to kernel WebSocket")?;
 
@@ -405,6 +398,27 @@ impl KernelWebSocket {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn apply_token_auth_omits_empty_token() {
+        let mut request = "ws://localhost".into_client_request().unwrap();
+        apply_token_auth(&mut request, "").unwrap();
+        assert!(!request.headers().contains_key("Authorization"));
+    }
+
+    #[test]
+    fn apply_token_auth_inserts_token_scheme() {
+        let mut request = "ws://localhost".into_client_request().unwrap();
+        apply_token_auth(&mut request, "secret").unwrap();
+        assert_eq!(request.headers()["Authorization"], "token secret");
+    }
+
+    #[test]
+    fn apply_token_auth_rejects_invalid_header_value() {
+        let mut request = "ws://localhost".into_client_request().unwrap();
+        let err = apply_token_auth(&mut request, "bad\ntoken").unwrap_err();
+        assert!(format!("{:#}", err).contains("Invalid Authorization header value"));
+    }
 
     #[tokio::test]
     async fn connect_with_token_authenticates_upgrade_without_url_credentials() {
